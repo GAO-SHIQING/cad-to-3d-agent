@@ -16,7 +16,11 @@ class Config:
     MAX_REVISIONS: int = 3
     QUALITY_THRESHOLD: float = 70.0   # 质量达标线 (0-100)，超过此值视为通过
     OUTPUT_DIR: str = os.getenv("OUTPUT_DIR", "./output")
-    # MCP 连接失败时是否自动回退到 Background (subprocess) 模式
+    # MCP 连接失败时是否自动启动 Blender (加载 MCP Add-on)
+    MCP_AUTO_LAUNCH: bool = os.getenv("MCP_AUTO_LAUNCH", "true").lower() in ("1", "true", "yes")
+    # 等待 Blender MCP 端口就绪的超时时间 (秒)
+    MCP_LAUNCH_TIMEOUT: float = float(os.getenv("MCP_LAUNCH_TIMEOUT", "30"))
+    # MCP + 自动启动均失败时是否回退到 Background (subprocess) 模式
     FALLBACK_TO_BACKGROUND: bool = os.getenv("FALLBACK_TO_BACKGROUND", "true").lower() in ("1", "true", "yes")
 
     @classmethod

@@ -1,6 +1,9 @@
 """节点 4: 建模执行"""
 
 import os
+import time
+import socket
+import subprocess
 from ..state import AgentState
 from tools.blender_tool import BlenderCommand, BlenderTool
 from tools.background_adapter import BackgroundBlenderTool
@@ -14,6 +17,68 @@ def _create_tool(mode: str) -> BlenderTool:
     if mode == "mcp":
         return MCPBlenderTool(host=Config.MCP_HOST, port=Config.MCP_PORT)
     return BackgroundBlenderTool(output_dir=Config.OUTPUT_DIR)
+
+
+def _check_port(host: str, port: int, timeout: float = 2.0) -> bool:
+    """检测 TCP 端口是否可达"""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        result = sock.connect_ex((host, port))
+        sock.close()
+        return result == 0
+    except Exception:
+        return False
+
+
+def _launch_blender_mcp() -> subprocess.Popen | None:
+    """启动 Blender GUI 进程（自动加载 MCP Add-on 监听 9876 端口）
+
+    Blender 启动后会自动执行 addon.py 的 register()，
+    其中创建 BlenderMCPServer 并调用 start() 监听 TCP 9876。
+
+    返回 subprocess.Popen 对象，调用方负责管理生命周期。
+    """
+    blender_bin = Config.BLENDER_EXECUTABLE
+
+    if not blender_bin or not os.path.isfile(blender_bin):
+        print("[execute] Blender 可执行文件不存在，跳过自动启动")
+        return None
+
+    print(f"[execute] 正在启动 Blender (MCP Add-on 将自动监听 "
+          f"{Config.MCP_HOST}:{Config.MCP_PORT}) ...")
+
+    try:
+        # 使用 Popen 启动 Blender GUI（非 background 模式，
+        # 因为 MCP add-on 依赖 bpy.app.timers 主线程事件循环）
+        proc = subprocess.Popen(
+            [blender_bin],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,  # 脱离终端，Blender 关闭不影响 Agent
+        )
+        return proc
+    except FileNotFoundError:
+        print(f"[execute] 找不到 Blender: {blender_bin}")
+        return None
+    except Exception as e:
+        print(f"[execute] 启动 Blender 失败: {e}")
+        return None
+
+
+def _wait_for_mcp(
+    host: str,
+    port: int,
+    timeout: float = 30.0,
+    interval: float = 1.0,
+) -> bool:
+    """轮询等待 MCP 端口就绪"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _check_port(host, port, timeout=1.0):
+            return True
+        time.sleep(interval)
+    return False
 
 
 def _plan_to_commands(plan: list[dict]) -> list[BlenderCommand]:
@@ -187,34 +252,69 @@ def execute_node(state: AgentState) -> AgentState:
     print(f"[execute] 共 {len(all_commands)} 步 "
           f"({len(commands)} 建模 + {len(post_commands)} 后处理)")
 
-    # === 执行策略: MCP 优先 → Background 保底 ===
-
-    # 确定尝试顺序
-    modes_to_try = []
-    if requested_mode == "mcp":
-        modes_to_try.append("mcp")
-        if Config.FALLBACK_TO_BACKGROUND:
-            modes_to_try.append("background")
-    else:
-        modes_to_try.append("background")
+    # === 执行策略: MCP 优先 → 自动启动 → Background 保底 ===
+    #
+    #  尝试顺序:
+    #    1. MCP 直连 (Blender 已运行)
+    #    2. 启动 Blender → 等待 MCP 端口就绪 → MCP 直连
+    #    3. Background subprocess 保底
 
     results = None
     used_tool = None
     used_mode = None
+    blender_proc = None
 
-    for mode in modes_to_try:
-        label = "[PRIMARY]" if mode == modes_to_try[0] else "[FALLBACK]"
-        print(f"\n[execute] {label} 尝试 {mode.upper()} 模式 ...")
-        results, used_tool = _try_execute(all_commands, mode)
+    # ── 第一阶段: 尝试 MCP ──
+    if requested_mode == "mcp":
+        print(f"\n[execute] [PRIMARY] 尝试 MCP 直连 "
+              f"({Config.MCP_HOST}:{Config.MCP_PORT}) ...")
+        results, used_tool = _try_execute(all_commands, "mcp")
         if results is not None:
-            used_mode = mode
-            break
-        if used_tool:
+            used_mode = "mcp"
+        else:
+            if used_tool:
+                used_tool.disconnect()
+                used_tool = None
+
+            # ── 第二阶段: MCP 连不上 → 尝试自动启动 Blender ──
+            if Config.MCP_AUTO_LAUNCH:
+                print("\n[execute] [RETRY] MCP 直连失败，尝试启动 Blender ...")
+                blender_proc = _launch_blender_mcp()
+
+                if blender_proc:
+                    print(f"[execute] Blender 进程已启动 (PID={blender_proc.pid})，"
+                          f"等待 MCP 端口就绪 ...")
+                    ready = _wait_for_mcp(
+                        Config.MCP_HOST,
+                        Config.MCP_PORT,
+                        timeout=Config.MCP_LAUNCH_TIMEOUT,
+                    )
+
+                    if ready:
+                        print(f"[execute] MCP 端口已就绪，重新尝试连接 ...")
+                        results, used_tool = _try_execute(all_commands, "mcp")
+                        if results is not None:
+                            used_mode = "mcp"
+                        elif used_tool:
+                            used_tool.disconnect()
+                            used_tool = None
+                    else:
+                        print(f"[execute] 等待超时 ({Config.MCP_LAUNCH_TIMEOUT}s)，"
+                              f"MCP 端口仍未就绪")
+
+    # ── 第三阶段: MCP 不可用 → Background 保底 ──
+    if results is None and Config.FALLBACK_TO_BACKGROUND:
+        print("\n[execute] [FALLBACK] MCP 路径不可用，回退到 Background 模式 ...")
+        results, used_tool = _try_execute(all_commands, "background")
+        if results is not None:
+            used_mode = "background"
+        elif used_tool:
             used_tool.disconnect()
             used_tool = None
 
+    # ── 所有尝试均失败 ──
     if results is None:
-        print("[execute] [FATAL] 所有执行模式均失败，无法建模")
+        print("[execute] [FATAL] 所有执行模式均失败 (MCP + 启动 + Background)，无法建模")
         state["execution_results"] = []
         return state
 
