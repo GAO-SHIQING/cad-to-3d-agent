@@ -11,3 +11,5 @@ dist/
 build/
 venv/
 .venv/
+file
+docs
