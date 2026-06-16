@@ -13,8 +13,39 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from agent.config import Config
 
 
-# Command handler code for the bpy script
-COMMAND_HANDLERS_CODE = '''\
+# === Blender Python script template (run inside blender --background --python) ===
+
+BPY_SCRIPT_TEMPLATE = r'''
+import bpy
+import json
+import os
+import math
+from mathutils import Vector
+
+# Clear default scene
+bpy.ops.object.select_all(action='SELECT')
+bpy.ops.object.delete(use_global=False)
+
+commands = {commands_json}
+
+# ============================================================
+# Execute all commands (modeling + post-processing)
+# ============================================================
+results = []
+
+# Persistent scene-level camera state (shared between auto_camera and render)
+_cam_center = (0, 0, 1.4)
+_cam_span = 5.0
+
+for cmd in commands:
+    step_id = cmd["step_id"]
+    operation = cmd["operation"]
+    params = cmd["params"]
+    name = f"unknown_{step_id}"
+
+    try:
+        # === Modeling operations ===
+
         if operation == "extrude_wall":
             start = params["start"]
             end = params["end"]
@@ -24,26 +55,25 @@ COMMAND_HANDLERS_CODE = '''\
             dx = end[0] - start[0]
             dy = end[1] - start[1]
             length = (dx**2 + dy**2) ** 0.5
-            angle = __import__('math').atan2(dy, dx)
+            angle = math.atan2(dy, dx)
 
-            bpy.ops.mesh.primitive_cube_add(
-                size=1, location=(start[0] + dx/2, start[1] + dy/2, height/2)
-            )
-            obj = bpy.context.active_object
-            obj.name = params.get("wall_id", "wall")
-            obj.scale = (length/2, thickness/2, height/2)
-            obj.rotation_euler.z = angle
-            name = obj.name
+            if length < 0.001:
+                name = f"skipped_zero_length_wall_{step_id}"
+            else:
+                bpy.ops.mesh.primitive_cube_add(
+                    size=1,
+                    location=(start[0] + dx / 2, start[1] + dy / 2, height / 2),
+                )
+                obj = bpy.context.active_object
+                obj.name = params.get("wall_id", f"wall_{step_id:02d}")
+                obj.scale = (length / 2, thickness / 2, height / 2)
+                obj.rotation_euler.z = angle
+                name = obj.name
 
         elif operation == "boolean_cut":
-            target_id = params["target_wall_id"]
+            target_id = params.get("target_wall_id", "")
             dims = params.get("dimensions", [1, 0.3, 2.1])
             loc = params.get("location", [0, 0, 0])
-
-            bpy.ops.mesh.primitive_cube_add(size=1, location=loc)
-            cutter = bpy.context.active_object
-            cutter.name = "cutter_temp"
-            cutter.scale = (dims[0]/2, dims[1]/2, dims[2]/2)
 
             target = bpy.data.objects.get(target_id)
             if target is None:
@@ -52,16 +82,36 @@ COMMAND_HANDLERS_CODE = '''\
                         target = obj
                         break
 
+            bpy.ops.mesh.primitive_cube_add(size=1, location=loc)
+            cutter = bpy.context.active_object
+            cutter.name = "cutter_temp"
+            cutter.scale = (dims[0] / 2, dims[1] / 2, dims[2] / 2)
+
             if target:
                 mod = target.modifiers.new(name="bool_cut", type='BOOLEAN')
                 mod.operation = 'DIFFERENCE'
                 mod.object = cutter
                 bpy.context.view_layer.objects.active = target
-                bpy.ops.object.modifier_apply({"modifier": mod.name})
-                bpy.data.objects.remove(cutter)
-                name = target.name
+                try:
+                    bpy.ops.object.modifier_apply(modifier=mod.name)
+                    name = target.name
+                except Exception as e:
+                    try:
+                        bpy.ops.object.modifier_apply({"modifier": mod.name})
+                        name = target.name
+                    except Exception:
+                        raise RuntimeError(f"modifier_apply failed: {e}")
             else:
-                name = f"cut_failed_{target_id}"
+                name = f"cut_failed_no_target_{target_id}"
+
+            # cleanup cutter
+            bpy.ops.object.select_all(action='DESELECT')
+            cutter.select_set(True)
+            bpy.context.view_layer.objects.active = cutter
+            try:
+                bpy.ops.object.delete(use_global=False)
+            except Exception:
+                pass
 
         elif operation == "create_column":
             loc = params.get("location", [0, 0])
@@ -74,18 +124,18 @@ COMMAND_HANDLERS_CODE = '''\
             if radius:
                 bpy.ops.mesh.primitive_cylinder_add(
                     radius=radius, depth=height,
-                    location=(loc[0], loc[1], height/2)
+                    location=(loc[0], loc[1], height / 2),
                 )
             elif width and depth:
                 bpy.ops.mesh.primitive_cube_add(
-                    size=1, location=(loc[0], loc[1], height/2)
+                    size=1, location=(loc[0], loc[1], height / 2),
                 )
                 obj = bpy.context.active_object
-                obj.scale = (width/2, depth/2, height/2)
+                obj.scale = (width / 2, depth / 2, height / 2)
             else:
                 bpy.ops.mesh.primitive_cylinder_add(
                     radius=0.15, depth=height,
-                    location=(loc[0], loc[1], height/2)
+                    location=(loc[0], loc[1], height / 2),
                 )
             obj = bpy.context.active_object
             obj.name = col_id
@@ -98,11 +148,11 @@ COMMAND_HANDLERS_CODE = '''\
             door_id = params.get("door_id", "door")
 
             bpy.ops.mesh.primitive_cube_add(
-                size=1, location=(loc[0], loc[1], height/2)
+                size=1, location=(loc[0], loc[1], height / 2),
             )
             obj = bpy.context.active_object
             obj.name = door_id
-            obj.scale = (width/2, 0.05, height/2)
+            obj.scale = (width / 2, 0.05, height / 2)
             obj.rotation_euler.z = params.get("rotation_z", 0)
             name = obj.name
 
@@ -114,73 +164,137 @@ COMMAND_HANDLERS_CODE = '''\
             win_id = params.get("window_id", "window")
 
             bpy.ops.mesh.primitive_cube_add(
-                size=1, location=(loc[0], loc[1], sill + height/2)
+                size=1, location=(loc[0], loc[1], sill + height / 2),
             )
             obj = bpy.context.active_object
             obj.name = win_id
-            obj.scale = (width/2, 0.1, height/2)
+            obj.scale = (width / 2, 0.1, height / 2)
             name = obj.name
 
+        # === Post-processing operations ===
+
+        elif operation == "corner_snap":
+            tol = params.get("tolerance", 0.3)
+            wall_objs = [o for o in bpy.data.objects if o.type == 'MESH' and o.name.startswith('wall_')]
+
+            if len(wall_objs) >= 2:
+                wall_data = []
+                for w in wall_objs:
+                    sl = Vector((-0.5, 0.0, 0.0))
+                    el = Vector((0.5, 0.0, 0.0))
+                    ws = w.matrix_world @ sl
+                    we = w.matrix_world @ el
+                    wall_data.append((w, ws, we))
+
+                for i in range(len(wall_data)):
+                    for j in range(i + 1, len(wall_data)):
+                        w1, s1, e1 = wall_data[i]
+                        w2, s2, e2 = wall_data[j]
+                        for p1, p2, wa, isa, wb, isb in [
+                            (s1, s2, w1, True, w2, True),
+                            (s1, e2, w1, True, w2, False),
+                            (e1, s2, w1, False, w2, True),
+                            (e1, e2, w1, False, w2, False),
+                        ]:
+                            d = (p1 - p2).length
+                            if 0.001 < d <= tol:
+                                snap = (p1 + p2) * 0.5
+                                sc, ec = (s1, e1) if wa == w1 else (s2, e2)
+                                nc = (snap + ec) * 0.5 if isa else (sc + snap) * 0.5
+                                nl = (ec - snap).length if isa else (snap - sc).length
+                                wa.location.x = nc.x; wa.location.y = nc.y
+                                wa.scale.x = nl
+                                sc, ec = (s2, e2) if wb == w2 else (s1, e1)
+                                nc = (snap + ec) * 0.5 if isb else (sc + snap) * 0.5
+                                nl = (ec - snap).length if isb else (snap - sc).length
+                                wb.location.x = nc.x; wb.location.y = nc.y
+                                wb.scale.x = nl
+                                break
+            name = "corner_snap_done"
+
+        elif operation == "cleanup_cutters":
+            cutters = [o for o in bpy.data.objects if o.name.startswith('cutter_temp')]
+            if cutters:
+                bpy.ops.object.select_all(action='DESELECT')
+                for c in cutters:
+                    c.select_set(True)
+                bpy.context.view_layer.objects.active = cutters[0]
+                bpy.ops.object.delete(use_global=False)
+            name = f"cleaned_{len(cutters)}_cutters"
+
+        elif operation == "auto_camera":
+            meshes = [o for o in bpy.data.objects if o.type == 'MESH']
+            if meshes:
+                mnx = mny = mnz = float('inf')
+                mxx = mxy = mxz = float('-inf')
+                for obj in meshes:
+                    for corner in obj.bound_box:
+                        wc = obj.matrix_world @ Vector(corner)
+                        mnx = min(mnx, wc.x); mny = min(mny, wc.y); mnz = min(mnz, wc.z)
+                        mxx = max(mxx, wc.x); mxy = max(mxy, wc.y); mxz = max(mxz, wc.z)
+                _cam_center = ((mnx+mxx)/2, (mny+mxy)/2, (mnz+mxz)/2)
+                _cam_span = max(mxx-mnx, mxy-mny) * 1.8
+                name = f"camera_framed"
+            else:
+                _cam_center = (0, 0, 1.4)
+                _cam_span = 5.0
+                name = "camera_default"
+
+        elif operation == "save_blend":
+            fp = params.get("filepath", "./output/model.blend")
+            os.makedirs(os.path.dirname(fp), exist_ok=True)
+            bpy.ops.wm.save_as_mainfile(filepath=fp)
+            name = "saved"
+
+        elif operation == "render":
+            output_dir = params.get("output_dir", "./output")
+            rx = params.get("resolution_x", 1920)
+            ry = params.get("resolution_y", 1080)
+            os.makedirs(output_dir, exist_ok=True)
+            cd = max(_cam_span, 5.0)
+            cx, cy, cz = _cam_center
+            angles = [
+                (cx+cd, cy-cd, cz+cd*0.8),
+                (cx, cy-cd, cz+cd*0.8),
+                (cx, cy+cd, cz+cd*0.8),
+                (cx+cd, cy, cz+cd*0.8),
+            ]
+            for idx, (x, y, z) in enumerate(angles):
+                cam = bpy.data.cameras.new(f"render_cam_{idx}")
+                co = bpy.data.objects.new(f"render_cam_{idx}", cam)
+                bpy.context.scene.collection.objects.link(co)
+                co.location = (x, y, z)
+                direction = Vector((cx-x, cy-y, cz-z))
+                co.rotation_euler = direction.to_track_quat('-Z', 'Y').to_euler()
+                bpy.context.scene.camera = co
+                bpy.context.scene.render.filepath = os.path.join(output_dir, f"render_{idx:02d}.png")
+                bpy.context.scene.render.engine = 'CYCLES'
+                bpy.context.scene.render.resolution_x = rx
+                bpy.context.scene.render.resolution_y = ry
+                bpy.ops.render.render(write_still=True)
+            name = "rendered"
+
         else:
-            name = f"skipped_{operation}"\
-'''
+            name = f"skipped_{operation}"
 
+        results.append({
+            "step_id": step_id,
+            "operation": operation,
+            "success": True,
+            "message": name,
+        })
 
-BPY_SCRIPT_TEMPLATE = """\
-import bpy
-import json
-import os
-
-# Clear default scene
-bpy.ops.object.select_all(action='SELECT')
-bpy.ops.object.delete(use_global=False)
-
-commands = {commands_json}
-
-results = []
-for cmd in commands:
-    step_id = cmd["step_id"]
-    operation = cmd["operation"]
-    params = cmd["params"]
-
-    try:
-{command_handlers}
-
-        results.append({{"step_id": step_id, "success": True, "message": name}})
     except Exception as e:
-        results.append({{"step_id": step_id, "success": False,
-                         "message": str(e)}})
-
-# Save .blend
-blend_path = r"{output_blend}"
-os.makedirs(os.path.dirname(blend_path), exist_ok=True)
-bpy.ops.wm.save_as_mainfile(filepath=blend_path)
-
-# Render from multiple angles
-render_angles = [(5, -5, 3), (0, -5, 3), (0, 5, 3), (5, 0, 3)]
-for i, (x, y, z) in enumerate(render_angles):
-    camera = bpy.data.cameras.new(f"render_cam_{{i}}")
-    cam_obj = bpy.data.objects.new(f"render_cam_{{i}}", camera)
-    bpy.context.scene.collection.objects.link(cam_obj)
-    cam_obj.location = (x, y, z)
-    cam_obj.rotation_euler = (1.1, 0, 0.8)
-
-    bpy.context.scene.camera = cam_obj
-    render_path = r"{output_dir}/render_{{i:02d}}.png"
-    bpy.context.scene.render.filepath = render_path
-    bpy.context.scene.render.engine = 'CYCLES'
-    bpy.context.scene.render.resolution_x = 1920
-    bpy.context.scene.render.resolution_y = 1080
-    bpy.ops.render.render(write_still=True)
+        results.append({
+            "step_id": step_id,
+            "operation": operation,
+            "success": False,
+            "message": str(e),
+        })
 
 # Output results JSON
 print("BLENDER_RESULTS:" + json.dumps(results, ensure_ascii=False))
-"""
-
-# Inject command handlers into template
-BPY_SCRIPT_TEMPLATE = BPY_SCRIPT_TEMPLATE.replace(
-    "{command_handlers}", COMMAND_HANDLERS_CODE
-)
+'''
 
 
 class BackgroundBlenderTool(BlenderTool):
@@ -232,10 +346,12 @@ class BackgroundBlenderTool(BlenderTool):
             for c in commands
         ], ensure_ascii=False)
 
-        script_content = BPY_SCRIPT_TEMPLATE.format(
-            commands_json=cmds_json,
-            output_blend=os.path.join(self._output_dir, "model.blend"),
-            output_dir=self._output_dir,
+        script_content = BPY_SCRIPT_TEMPLATE.replace(
+            "{commands_json}", cmds_json
+        ).replace(
+            "{output_blend}", os.path.join(self._output_dir, "model.blend")
+        ).replace(
+            "{output_dir}", self._output_dir
         )
 
         with tempfile.NamedTemporaryFile(
@@ -264,6 +380,14 @@ class BackgroundBlenderTool(BlenderTool):
                             ))
                     except json.JSONDecodeError:
                         pass
+
+            # Log debug lines
+            for line in result.stdout.split("\n"):
+                if any(line.startswith(prefix) for prefix in (
+                    "BLENDER_NORMALIZE:", "BLENDER_SNAP:", "BLENDER_CLEANUP:",
+                    "BLENDER_CAMERA:"
+                )):
+                    print(f"[BackgroundBlenderTool] {line}")
 
             if not results:
                 print(f"[BackgroundBlenderTool] stderr: {result.stderr[:500]}")

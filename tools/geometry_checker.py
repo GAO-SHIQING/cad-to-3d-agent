@@ -20,7 +20,7 @@ def check_entity_count(
     for r in execution_results:
         if not r.get("success"):
             continue
-        op = r.get("operation", r.get("output", {}).get("type", "unknown"))
+        op = r.get("operation") or (r.get("output") or {}).get("type", "unknown")
         actual[op] = actual.get(op, 0) + 1
 
     issues = []

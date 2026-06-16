@@ -11,6 +11,8 @@ class Config:
     OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
     LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-5.5")
     BLENDER_EXECUTABLE: str = os.getenv("BLENDER_EXECUTABLE", "blender")
+    MCP_HOST: str = os.getenv("MCP_HOST", "localhost")
+    MCP_PORT: int = int(os.getenv("MCP_PORT", "9876"))
     MAX_REVISIONS: int = 3
     OUTPUT_DIR: str = os.getenv("OUTPUT_DIR", "./output")
 

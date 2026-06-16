@@ -57,5 +57,5 @@ def build_graph() -> StateGraph:
 
     return graph.compile(
         checkpointer=MemorySaver(),
-        interrupt_before=["confirm"],
+        interrupt_before=["confirm"],  # 生产环境暂停等待人工确认
     )
