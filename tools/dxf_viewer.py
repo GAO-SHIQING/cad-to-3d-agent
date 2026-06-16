@@ -11,6 +11,7 @@
 
 import base64
 import io
+import os
 from pathlib import Path
 
 import ezdxf
@@ -20,6 +21,42 @@ from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+# Allowed directories for path safety
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_ALLOWED_INPUT_DIRS = [
+    _PROJECT_ROOT / "examples",
+    _PROJECT_ROOT / "file",
+]
+_ALLOWED_OUTPUT_DIR = _PROJECT_ROOT / "output"
+
+
+def _validate_input_path(path: str) -> str:
+    """Resolve input DXF path and verify it is a safe .dxf file.
+
+    Prevents traversal outside the filesystem root (e.g. /../../etc/passwd
+    would be caught).  Allows any .dxf file via CLI or project directories.
+    """
+    resolved = Path(path).resolve()
+    if not str(resolved).lower().endswith(".dxf"):
+        raise ValueError(f"Input path must be a .dxf file: {path}")
+    if not resolved.exists():
+        raise ValueError(f"Input file does not exist: {path}")
+    return str(resolved)
+
+
+def _validate_output_path(path: str) -> str:
+    """Resolve output path and verify it stays within the project output dir.
+
+    Prevents writing to arbitrary system locations.
+    """
+    resolved = Path(path).resolve()
+    allowed = _ALLOWED_OUTPUT_DIR.resolve()
+    if resolved == allowed or str(resolved).startswith(str(allowed) + os.sep):
+        return str(resolved)
+    raise ValueError(
+        f"Output path '{path}' resolves outside allowed directory: {allowed}"
+    )
 
 
 # 图层渲染配置
@@ -59,7 +96,11 @@ def _render_core(
     失败返回 None，调用方负责 plt.close()。
     """
     try:
+        _validate_input_path(dxf_path)
         doc = ezdxf.readfile(dxf_path)
+    except ValueError as e:
+        print(f"[dxf_viewer] 路径验证失败: {e}")
+        return None
     except (IOError, ezdxf.DXFStructureError) as e:
         print(f"[dxf_viewer] 读取 DXF 失败: {e}")
         return None
@@ -129,6 +170,12 @@ def render_dxf_to_png(
     Returns:
         成功返回 True
     """
+    try:
+        output_path = _validate_output_path(output_path)
+    except ValueError as e:
+        print(f"[dxf_viewer] 输出路径不允许: {e}")
+        return False
+
     result = _render_core(dxf_path, dpi=dpi)
     if result is None:
         return False
