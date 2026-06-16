@@ -21,9 +21,11 @@ def test_agent_state_structure():
         "validation_result": {},
         "revision_count": 0,
         "max_revisions": 3,
+        "quality_score": 0.0,
         "validation_passed": False,
     }
     assert state["revision_count"] == 0
     assert state["max_revisions"] == 3
     assert state["execution_mode"] == "background"
+    assert state["quality_score"] == 0.0
     assert len(state["cad_features"]) == 0

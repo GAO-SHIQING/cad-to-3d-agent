@@ -13,7 +13,7 @@ def make_state(**overrides):
         "execution_mode": "background", "current_step": 0,
         "execution_results": [], "blender_output_path": "",
         "render_images": [], "validation_result": {},
-        "revision_count": 0, "max_revisions": 3, "validation_passed": False,
+        "revision_count": 0, "max_revisions": 3, "quality_score": 0.0, "validation_passed": False,
     }
     state.update(overrides)
     return state
@@ -51,9 +51,9 @@ def test_route_validate_passed():
 
 
 def test_route_validate_not_passed_under_limit():
-    """测试验证路由：不通过且未超限 → execute"""
+    """测试验证路由：不通过且未超限 → plan（修正循环）"""
     state = make_state(validation_passed=False, revision_count=1)
-    assert route_validate(state) == "execute"
+    assert route_validate(state) == "plan"
 
 
 def test_route_validate_not_passed_over_limit():

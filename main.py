@@ -30,6 +30,7 @@ def make_initial_state(dxf_path: str, instruction: str, mode: str) -> AgentState
         "validation_result": {},
         "revision_count": 0,
         "max_revisions": Config.MAX_REVISIONS,
+        "quality_score": 0.0,
         "validation_passed": False,
     }
 
@@ -54,7 +55,7 @@ def run_with_interrupts(app, initial_state: AgentState, auto_confirm: bool = Fal
             # 展示计划并等待用户输入
             plan = state.values.get("modeling_plan", [])
             print("\n" + "=" * 60)
-            print(f"📋 建模计划（共 {len(plan)} 步）")
+            print(f"[计划]  建模计划（共 {len(plan)} 步）")
             print("=" * 60)
             for step in plan:
                 print(f"  步骤 {step.get('step_id', '?')}: {step.get('operation', '?')}")
@@ -76,7 +77,7 @@ def run_with_interrupts(app, initial_state: AgentState, auto_confirm: bool = Fal
 def main():
     errors = Config.validate()
     if errors:
-        print("❌ 配置错误:")
+        print("[ERROR] 配置错误:")
         for e in errors:
             print(f"  - {e}")
         sys.exit(1)
@@ -93,8 +94,8 @@ def main():
                         help="自动批准建模计划（跳过人工确认）")
     args = parser.parse_args()
 
-    print(f"📐 载入图纸: {args.dxf_path}")
-    print(f"🔧 执行模式: {args.mode}")
+    print(f"[载入] 图纸: {args.dxf_path}")
+    print(f"[模式] 执行模式: {args.mode}")
 
     initial_state = make_initial_state(
         args.dxf_path, args.instruction, args.mode
@@ -107,9 +108,9 @@ def main():
 
     # 输出结果
     if result.get("validation_passed"):
-        print(f"\n✅ 建模完成: {result.get('blender_output_path', 'output/')}")
+        print(f"\n[完成] 建模完成: {result.get('blender_output_path', 'output/')}")
     else:
-        print(f"\n⚠️  达到最佳结果（验证未完全通过）")
+        print(f"\n[WARN] 达到最佳结果（验证未完全通过）")
         print(f"输出路径: {result.get('blender_output_path', 'output/')}")
         vr = result.get("validation_result", {})
         if vr:

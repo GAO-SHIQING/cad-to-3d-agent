@@ -23,7 +23,7 @@ def confirm_node(state: AgentState) -> AgentState:
 
     # === 展示计划摘要 ===
     print("\n" + "=" * 60)
-    print("📋 建模计划")
+    print("[计划]  建模计划")
     print("=" * 60)
     print(f"共 {len(plan)} 个步骤：\n")
 
@@ -45,14 +45,14 @@ def confirm_node(state: AgentState) -> AgentState:
 
     if user_input.lower() in ("y", "yes", ""):
         state["user_confirmed"] = True
-        print("[confirm] ✅ 计划已批准")
+        print("[confirm] [PASS]  计划已批准")
     elif user_input.lower() in ("n", "no", "REDO"):
         state["user_confirmed"] = False
         state["user_feedback"] = "REDO"
-        print("[confirm] 🔄 重新规划")
+        print("[confirm] [重试]  重新规划")
     else:
         state["user_confirmed"] = False
         state["user_feedback"] = user_input
-        print(f"[confirm] 📝 修改指令已记录: {user_input}")
+        print(f"[confirm] [修改]  修改指令已记录: {user_input}")
 
     return state

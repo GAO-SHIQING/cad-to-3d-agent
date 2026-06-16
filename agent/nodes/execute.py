@@ -126,7 +126,7 @@ def execute_node(state: AgentState) -> AgentState:
     tool = _create_tool(mode)
 
     if not tool.connect():
-        print("[execute] ❌ 无法连接到 Blender")
+        print("[execute] [FAIL]  无法连接到 Blender")
         state["execution_results"] = []
         return state
 

@@ -504,7 +504,7 @@ class MCPBlenderTool(BlenderTool):
         for cmd in commands:
             result = self.execute(cmd)
             results.append(result)
-            status = "✅" if result.success else "❌"
+            status = "[PASS] " if result.success else "[FAIL] "
             print(f"[MCPBlenderTool] {status} step {cmd.step_id}: "
                   f"{cmd.operation} → {result.message}")
         return results

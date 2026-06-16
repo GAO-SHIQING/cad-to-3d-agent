@@ -28,4 +28,5 @@ class AgentState(TypedDict):
     validation_result: Dict             # 验证结果
     revision_count: int                 # 修订次数
     max_revisions: int                  # 最大修订次数 (默认3)
+    quality_score: float                # 综合质量评分 (0-100)
     validation_passed: bool             # 验证是否通过

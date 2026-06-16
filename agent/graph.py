@@ -16,12 +16,14 @@ def route_confirm(state: AgentState) -> str:
 
 
 def route_validate(state: AgentState) -> str:
-    """验证节点后的路由"""
+    """验证节点后的路由：通过 -> END，未通过 -> 返回 plan 重新规划"""
     if state.get("validation_passed"):
         return END
     if state["revision_count"] >= state.get("max_revisions", 3):
         return END
-    return "execute"
+    # 关键修复：验证不通过时回到 plan 节点（带 feedback）重新生成计划，
+    # 而不是直接重跑 execute（执行同一个 plan 不会有改善）
+    return "plan"
 
 
 def build_graph() -> StateGraph:
@@ -49,9 +51,9 @@ def build_graph() -> StateGraph:
     # 执行 → 验证
     graph.add_edge("execute", "validate")
 
-    # 验证 → 条件路由（通过→END，不通过→执行，超限→END）
+    # 验证 → 条件路由（通过→END，不通过→plan 重新规划，超限→END）
     graph.add_conditional_edges("validate", route_validate, {
-        "execute": "execute",
+        "plan": "plan",
         END: END,
     })
 

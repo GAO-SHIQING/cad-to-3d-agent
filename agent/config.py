@@ -14,6 +14,7 @@ class Config:
     MCP_HOST: str = os.getenv("MCP_HOST", "localhost")
     MCP_PORT: int = int(os.getenv("MCP_PORT", "9876"))
     MAX_REVISIONS: int = 3
+    QUALITY_THRESHOLD: float = 70.0   # 质量达标线 (0-100)，超过此值视为通过
     OUTPUT_DIR: str = os.getenv("OUTPUT_DIR", "./output")
 
     @classmethod

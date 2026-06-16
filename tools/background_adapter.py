@@ -26,6 +26,54 @@ from mathutils import Vector
 bpy.ops.object.select_all(action='SELECT')
 bpy.ops.object.delete(use_global=False)
 
+# === Scene lighting setup ===
+# Bright world background
+world = bpy.context.scene.world
+world.use_nodes = True
+bg_node = world.node_tree.nodes['Background']
+bg_node.inputs[0].default_value = (0.95, 0.95, 0.95, 1.0)
+bg_node.inputs[1].default_value = 1.5
+
+# Sun light for directional illumination
+bpy.ops.object.light_add(type='SUN', location=(15, -10, 25))
+sun = bpy.context.active_object
+sun.data.energy = 1.5
+sun.data.angle = 0.1
+
+# Fill light from opposite side
+bpy.ops.object.light_add(type='AREA', location=(-5, 10, 8))
+fill = bpy.context.active_object
+fill.data.energy = 60.0
+fill.data.size = 10.0
+
+# Top-down area light for even illumination
+bpy.ops.object.light_add(type='AREA', location=(0, 0, 6))
+top = bpy.context.active_object
+top.data.energy = 50.0
+top.data.size = 10.0
+
+# Use EEVEE for fast bright renders
+bpy.context.scene.render.engine = 'BLENDER_EEVEE'
+# EEVEE settings (API differs between Blender versions)
+try:
+    bpy.context.scene.eevee.use_shadows = True
+    bpy.context.scene.eevee.shadow_cube_size = '1024'
+except AttributeError:
+    pass  # Blender 5.x changed EEVEE API
+
+# === Material library ===
+def _make_mat(name, color, roughness=0.8):
+    mat = bpy.data.materials.new(name)
+    mat.diffuse_color = color
+    mat.roughness = roughness
+    return mat
+
+_mat_wall = _make_mat('Wall', (0.82, 0.80, 0.78, 1.0), 0.9)
+_mat_column = _make_mat('Column', (0.65, 0.63, 0.60, 1.0), 0.7)
+_mat_window = _make_mat('Window', (0.30, 0.55, 0.75, 1.0), 0.3)
+_mat_door = _make_mat('Door', (0.55, 0.35, 0.18, 1.0), 0.6)
+_mat_glass = _make_mat('Glass', (0.65, 0.82, 0.95, 0.4), 0.1)
+
 commands = {commands_json}
 
 # ============================================================
@@ -68,6 +116,7 @@ for cmd in commands:
                 obj.name = params.get("wall_id", f"wall_{step_id:02d}")
                 obj.scale = (length / 2, thickness / 2, height / 2)
                 obj.rotation_euler.z = angle
+                obj.data.materials.append(_mat_wall)
                 name = obj.name
 
         elif operation == "boolean_cut":
@@ -82,10 +131,12 @@ for cmd in commands:
                         target = obj
                         break
 
+            # Force cutter depth to fully penetrate wall (min 0.5m wall-normal)
+            cut_depth = max(dims[1], 0.5)
             bpy.ops.mesh.primitive_cube_add(size=1, location=loc)
             cutter = bpy.context.active_object
             cutter.name = "cutter_temp"
-            cutter.scale = (dims[0] / 2, dims[1] / 2, dims[2] / 2)
+            cutter.scale = (dims[0] / 2, cut_depth / 2, dims[2] / 2)
 
             if target:
                 mod = target.modifiers.new(name="bool_cut", type='BOOLEAN')
@@ -146,14 +197,22 @@ for cmd in commands:
             width = params.get("width", 0.9)
             height = params.get("height", 2.1)
             door_id = params.get("door_id", "door")
+            wall_angle = params.get("rotation_z", 0)
+
+            # Door panel: position at opening center, offset along wall normal for hinge
+            door_thick = 0.06
+            hinge_offset = params.get("wall_thickness", 0.24) * 0.5
+            hinge_x = loc[0] + hinge_offset * math.cos(wall_angle + math.pi/2)
+            hinge_y = loc[1] + hinge_offset * math.sin(wall_angle + math.pi/2)
 
             bpy.ops.mesh.primitive_cube_add(
-                size=1, location=(loc[0], loc[1], height / 2),
+                size=1, location=(hinge_x, hinge_y, height / 2),
             )
             obj = bpy.context.active_object
             obj.name = door_id
-            obj.scale = (width / 2, 0.05, height / 2)
-            obj.rotation_euler.z = params.get("rotation_z", 0)
+            obj.scale = (width / 2, door_thick / 2, height / 2)
+            obj.rotation_euler.z = wall_angle
+            obj.data.materials.append(_mat_door)
             name = obj.name
 
         elif operation == "place_window":
@@ -162,13 +221,18 @@ for cmd in commands:
             height = params.get("height", 1.5)
             sill = params.get("sill_height", 0.9)
             win_id = params.get("window_id", "window")
+            wall_thick = params.get("wall_thickness", 0.24)
 
+            # Window frame: slightly larger than opening, flush with wall surface
+            frame_depth = wall_thick * 1.2
             bpy.ops.mesh.primitive_cube_add(
                 size=1, location=(loc[0], loc[1], sill + height / 2),
             )
             obj = bpy.context.active_object
             obj.name = win_id
-            obj.scale = (width / 2, 0.1, height / 2)
+            obj.scale = (width / 2, frame_depth / 2, height / 2)
+            obj.rotation_euler.z = params.get("rotation_z", 0)
+            obj.data.materials.append(_mat_window)
             name = obj.name
 
         # === Post-processing operations ===
@@ -268,7 +332,6 @@ for cmd in commands:
                 co.rotation_euler = direction.to_track_quat('-Z', 'Y').to_euler()
                 bpy.context.scene.camera = co
                 bpy.context.scene.render.filepath = os.path.join(output_dir, f"render_{idx:02d}.png")
-                bpy.context.scene.render.engine = 'CYCLES'
                 bpy.context.scene.render.resolution_x = rx
                 bpy.context.scene.render.resolution_y = ry
                 bpy.ops.render.render(write_still=True)

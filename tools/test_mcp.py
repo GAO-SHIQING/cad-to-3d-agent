@@ -37,7 +37,7 @@ commands = [
 print(f'Executing {len(commands)} commands...')
 for cmd in commands:
     r = tool.execute(cmd)
-    status = '✅' if r.success else '❌'
+    status = '[PASS] ' if r.success else '[FAIL] '
     print(f'  {status} {cmd.operation}: {r.message}')
 
 # Render with EEVEE for speed
