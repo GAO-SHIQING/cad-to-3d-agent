@@ -73,6 +73,8 @@ _mat_column = _make_mat('Column', (0.65, 0.63, 0.60, 1.0), 0.7)
 _mat_window = _make_mat('Window', (0.30, 0.55, 0.75, 1.0), 0.3)
 _mat_door = _make_mat('Door', (0.55, 0.35, 0.18, 1.0), 0.6)
 _mat_glass = _make_mat('Glass', (0.65, 0.82, 0.95, 0.4), 0.1)
+_mat_floor = _make_mat('Floor', (0.60, 0.58, 0.55, 1.0), 0.95)
+_mat_ceiling = _make_mat('Ceiling', (0.92, 0.90, 0.88, 1.0), 0.9)
 
 commands = {commands_json}
 
@@ -237,44 +239,85 @@ for cmd in commands:
 
         # === Post-processing operations ===
 
-        elif operation == "corner_snap":
-            tol = params.get("tolerance", 0.3)
-            wall_objs = [o for o in bpy.data.objects if o.type == 'MESH' and o.name.startswith('wall_')]
+        elif operation == "join_and_merge":
+            merge_threshold = params.get("merge_threshold", 0.3)
+            wall_objs = [o for o in bpy.data.objects if o.type == 'MESH'
+                         and (o.name.startswith('wall_') or o.name.startswith('column_'))]
 
             if len(wall_objs) >= 2:
-                wall_data = []
+                # Deselect all, select only wall objects
+                bpy.ops.object.select_all(action='DESELECT')
                 for w in wall_objs:
-                    sl = Vector((-0.5, 0.0, 0.0))
-                    el = Vector((0.5, 0.0, 0.0))
-                    ws = w.matrix_world @ sl
-                    we = w.matrix_world @ el
-                    wall_data.append((w, ws, we))
+                    w.select_set(True)
+                bpy.context.view_layer.objects.active = wall_objs[0]
 
-                for i in range(len(wall_data)):
-                    for j in range(i + 1, len(wall_data)):
-                        w1, s1, e1 = wall_data[i]
-                        w2, s2, e2 = wall_data[j]
-                        for p1, p2, wa, isa, wb, isb in [
-                            (s1, s2, w1, True, w2, True),
-                            (s1, e2, w1, True, w2, False),
-                            (e1, s2, w1, False, w2, True),
-                            (e1, e2, w1, False, w2, False),
-                        ]:
-                            d = (p1 - p2).length
-                            if 0.001 < d <= tol:
-                                snap = (p1 + p2) * 0.5
-                                sc, ec = (s1, e1) if wa == w1 else (s2, e2)
-                                nc = (snap + ec) * 0.5 if isa else (sc + snap) * 0.5
-                                nl = (ec - snap).length if isa else (snap - sc).length
-                                wa.location.x = nc.x; wa.location.y = nc.y
-                                wa.scale.x = nl
-                                sc, ec = (s2, e2) if wb == w2 else (s1, e1)
-                                nc = (snap + ec) * 0.5 if isb else (sc + snap) * 0.5
-                                nl = (ec - snap).length if isb else (snap - sc).length
-                                wb.location.x = nc.x; wb.location.y = nc.y
-                                wb.scale.x = nl
-                                break
-            name = "corner_snap_done"
+                # Join into single mesh
+                bpy.ops.object.join()
+
+                # Enter edit mode, merge vertices by distance
+                joined = bpy.context.active_object
+                bpy.ops.object.mode_set(mode='EDIT')
+                bpy.ops.mesh.select_all(action='SELECT')
+                bpy.ops.mesh.remove_doubles(threshold=merge_threshold)
+                bpy.ops.mesh.normals_make_consistent(inside=False)
+                bpy.ops.object.mode_set(mode='OBJECT')
+
+                name = f"joined_{len(wall_objs)}_walls_merged_at_{merge_threshold}m"
+            elif len(wall_objs) == 1:
+                name = "single_wall_no_join_needed"
+            else:
+                name = "no_walls_to_join"
+
+        elif operation == "create_floor_ceiling":
+            floor_info = params.get("floor_bounds")
+            wall_h = params.get("wall_height", 2.8)
+
+            if floor_info:
+                center = floor_info.get("center", [0, 0])
+                size = floor_info.get("size", [5, 5])
+                cx, cy = center[0], center[1]
+                sx, sy = size[0], size[1]
+            else:
+                # Fallback: compute from all mesh objects
+                meshes = [o for o in bpy.data.objects if o.type == 'MESH']
+                if meshes:
+                    mnx = mny = mnz = float('inf')
+                    mxx = mxy = mxz = float('-inf')
+                    for obj in meshes:
+                        for corner in obj.bound_box:
+                            wc = obj.matrix_world @ Vector(corner)
+                            mnx = min(mnx, wc.x); mny = min(mny, wc.y); mnz = min(mnz, wc.z)
+                            mxx = max(mxx, wc.x); mxy = max(mxy, wc.y); mxz = max(mxz, wc.z)
+                    margin = 0.3
+                    cx = (mnx + mxx) / 2
+                    cy = (mny + mxy) / 2
+                    sx = (mxx - mnx) + 2 * margin
+                    sy = (mxy - mny) + 2 * margin
+                else:
+                    cx = cy = 0
+                    sx = sy = 5
+
+            # Floor: plane at z = -0.03 (just below wall bottom)
+            floor_z = -0.03
+            bpy.ops.mesh.primitive_plane_add(
+                size=1, location=(cx, cy, floor_z)
+            )
+            floor = bpy.context.active_object
+            floor.name = "floor"
+            floor.scale = (sx / 2, sy / 2, 1)
+            floor.data.materials.append(_mat_floor)
+
+            # Ceiling: plane at z = wall_height + 0.03
+            ceil_z = wall_h + 0.03
+            bpy.ops.mesh.primitive_plane_add(
+                size=1, location=(cx, cy, ceil_z)
+            )
+            ceiling = bpy.context.active_object
+            ceiling.name = "ceiling"
+            ceiling.scale = (sx / 2, sy / 2, 1)
+            ceiling.data.materials.append(_mat_ceiling)
+
+            name = "floor_and_ceiling_created"
 
         elif operation == "cleanup_cutters":
             cutters = [o for o in bpy.data.objects if o.name.startswith('cutter_temp')]

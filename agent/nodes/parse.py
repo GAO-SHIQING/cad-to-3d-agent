@@ -6,6 +6,7 @@ from ..llm import chat_with_vision
 from ..prompts import PARSE_SYSTEM_PROMPT
 from tools.cad_parser import extract_geometry, cluster_by_spatial
 from tools.dxf_viewer import render_dxf_to_base64
+from tools.wall_topology import cluster_wall_endpoints
 
 
 def parse_cad_node(state: AgentState) -> AgentState:
@@ -75,8 +76,12 @@ def parse_cad_node(state: AgentState) -> AgentState:
         features = json.loads(response)
         if isinstance(features, dict):
             features = [features]
-        state["cad_features"] = features
         print(f"[parse] Vision LLM 识别出 {len(features)} 个建筑实体")
+
+        # === 墙体拓扑推断：端点聚类归并 ===
+        # Vision LLM 提取的坐标天然有误差，需将相近端点归并为共享角点
+        features = cluster_wall_endpoints(features)
+        state["cad_features"] = features
 
     except json.JSONDecodeError as e:
         print(f"[parse] Vision LLM 返回格式错误: {e}")

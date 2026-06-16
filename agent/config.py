@@ -16,6 +16,8 @@ class Config:
     MAX_REVISIONS: int = 3
     QUALITY_THRESHOLD: float = 70.0   # 质量达标线 (0-100)，超过此值视为通过
     OUTPUT_DIR: str = os.getenv("OUTPUT_DIR", "./output")
+    # MCP 连接失败时是否自动回退到 Background (subprocess) 模式
+    FALLBACK_TO_BACKGROUND: bool = os.getenv("FALLBACK_TO_BACKGROUND", "true").lower() in ("1", "true", "yes")
 
     @classmethod
     def validate(cls) -> list[str]:

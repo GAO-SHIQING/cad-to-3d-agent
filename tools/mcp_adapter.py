@@ -105,8 +105,12 @@ def validate_params(operation: str, params: dict) -> dict:
         clean["sill_height"] = _check_num(params.get("sill_height"), 0.9)
         clean["window_id"] = _check_str_id(params.get("window_id"), "window_unknown")
 
-    elif operation == "corner_snap":
-        clean["tolerance"] = _check_num(params.get("tolerance"), 0.3)
+    elif operation == "join_and_merge":
+        clean["merge_threshold"] = _check_num(params.get("merge_threshold"), 0.3)
+
+    elif operation == "create_floor_ceiling":
+        clean["floor_bounds"] = params.get("floor_bounds")  # dict, trust the pipeline
+        clean["wall_height"] = _check_num(params.get("wall_height"), 2.8)
 
     elif operation in ("cleanup_cutters", "auto_camera"):
         pass  # No params needed
@@ -155,6 +159,8 @@ def _generate_bpy_for_command(operation: str, params: dict, step_id: int) -> str
             "location=(_s[0]+_dx/2,_s[1]+_dy/2,_h/2))\n"
             "    _o=bpy.context.active_object; _o.name=_wid\n"
             "    _o.scale=(_len/2,_thk/2,_h/2); _o.rotation_euler.z=_ang\n"
+            "    _mat=bpy.data.materials.get('Wall')\n"
+            "    if _mat: _o.data.materials.append(_mat)\n"
             '    print("STEP_RESULT:"+_o.name)\n')
 
     elif operation == "boolean_cut":
@@ -236,6 +242,8 @@ def _generate_bpy_for_command(operation: str, params: dict, step_id: int) -> str
             "bpy.ops.mesh.primitive_cube_add(size=1,location=(_loc[0],_loc[1],_h/2))\n"
             "_o=bpy.context.active_object; _o.name=_did\n"
             "_o.scale=(_w/2,0.05,_h/2); _o.rotation_euler.z=_rot\n"
+            "_mat=bpy.data.materials.get('Door')\n"
+            "if _mat: _o.data.materials.append(_mat)\n"
             'print("STEP_RESULT:"+_o.name)\n')
 
     elif operation == "place_window":
@@ -253,45 +261,71 @@ def _generate_bpy_for_command(operation: str, params: dict, step_id: int) -> str
             "location=(_loc[0],_loc[1],_sill+_h/2))\n"
             "_o=bpy.context.active_object; _o.name=_wid\n"
             "_o.scale=(_w/2,0.1,_h/2)\n"
+            "_mat=bpy.data.materials.get('Window')\n"
+            "if _mat: _o.data.materials.append(_mat)\n"
             'print("STEP_RESULT:"+_o.name)\n')
 
-    elif operation == "corner_snap":
-        tol_j = json.dumps(p["tolerance"])
+    elif operation == "join_and_merge":
+        mt_j = json.dumps(p["merge_threshold"])
         return (
             "import bpy, json\n"
             "from mathutils import Vector\n"
-            f"_tol=json.loads({tol_j!r})\n"
-            "_w=[o for o in bpy.data.objects "
-            "if o.type=='MESH' and o.name.startswith('wall_')]\n"
+            f"_mt=json.loads({mt_j!r})\n"
+            "_w=[o for o in bpy.data.objects if o.type=='MESH' and "
+            "(o.name.startswith('wall_') or o.name.startswith('column_'))]\n"
             "if len(_w)>=2:\n"
-            "    _wd=[]\n"
-            "    for _ww in _w:\n"
-            "        _s=_ww.matrix_world@Vector((-0.5,0,0))\n"
-            "        _e=_ww.matrix_world@Vector((0.5,0,0))\n"
-            "        _wd.append((_ww,_s,_e))\n"
-            "    for _i in range(len(_wd)):\n"
-            "        for _j in range(_i+1,len(_wd)):\n"
-            "            _w1,_s1,_e1=_wd[_i]; _w2,_s2,_e2=_wd[_j]\n"
-            "            for _p1,_p2,_wa,_isa,_wb,_isb in [\n"
-            "                (_s1,_s2,_w1,True,_w2,True),\n"
-            "                (_s1,_e2,_w1,True,_w2,False),\n"
-            "                (_e1,_s2,_w1,False,_w2,True),\n"
-            "                (_e1,_e2,_w1,False,_w2,False)]:\n"
-            "                _d=(_p1-_p2).length\n"
-            "                if 0.001<_d<=_tol:\n"
-            "                    _snap=(_p1+_p2)*0.5\n"
-            "                    _sc,_ec=(_s1,_e1) if _wa==_w1 else (_s2,_e2)\n"
-            "                    if _isa: _nc=(_snap+_ec)*0.5; _nl=(_ec-_snap).length\n"
-            "                    else: _nc=(_sc+_snap)*0.5; _nl=(_snap-_sc).length\n"
-            "                    _wa.location.x=_nc.x; _wa.location.y=_nc.y\n"
-            "                    _wa.scale.x=_nl\n"
-            "                    _sc,_ec=(_s2,_e2) if _wb==_w2 else (_s1,_e1)\n"
-            "                    if _isb: _nc=(_snap+_ec)*0.5; _nl=(_ec-_snap).length\n"
-            "                    else: _nc=(_sc+_snap)*0.5; _nl=(_snap-_sc).length\n"
-            "                    _wb.location.x=_nc.x; _wb.location.y=_nc.y\n"
-            "                    _wb.scale.x=_nl\n"
-            "                    break\n"
-            "print('STEP_RESULT:corner_snap_done')\n")
+            "    bpy.ops.object.select_all(action='DESELECT')\n"
+            "    for _o in _w: _o.select_set(True)\n"
+            "    bpy.context.view_layer.objects.active=_w[0]\n"
+            "    bpy.ops.object.join()\n"
+            "    _j=bpy.context.active_object\n"
+            "    bpy.ops.object.mode_set(mode='EDIT')\n"
+            "    bpy.ops.mesh.select_all(action='SELECT')\n"
+            "    bpy.ops.mesh.remove_doubles(threshold=_mt)\n"
+            "    bpy.ops.mesh.normals_make_consistent(inside=False)\n"
+            "    bpy.ops.object.mode_set(mode='OBJECT')\n"
+            "    print('STEP_RESULT:joined_'+str(len(_w))+'_walls')\n"
+            "elif len(_w)==1:\n"
+            "    print('STEP_RESULT:single_wall_no_join')\n"
+            "else:\n"
+            "    print('STEP_RESULT:no_walls_to_join')\n")
+
+    elif operation == "create_floor_ceiling":
+        fb_j = json.dumps(p.get("floor_bounds"))
+        wh_j = json.dumps(p.get("wall_height"))
+        return (
+            "import bpy, json\n"
+            "from mathutils import Vector\n"
+            f"_fb=json.loads({fb_j!r}); _wh=json.loads({wh_j!r})\n"
+            "if _fb:\n"
+            "    _cx=_fb['center'][0]; _cy=_fb['center'][1]\n"
+            "    _sx=_fb['size'][0]; _sy=_fb['size'][1]\n"
+            "else:\n"
+            "    _objs=[o for o in bpy.data.objects if o.type=='MESH']\n"
+            "    if _objs:\n"
+            "        _mnx=_mny=float('inf'); _mxx=_mxy=float('-inf')\n"
+            "        for o in _objs:\n"
+            "            for c in o.bound_box:\n"
+            "                _w=o.matrix_world@Vector(c)\n"
+            "                _mnx=min(_mnx,_w.x); _mny=min(_mny,_w.y)\n"
+            "                _mxx=max(_mxx,_w.x); _mxy=max(_mxy,_w.y)\n"
+            "        _cx=(_mnx+_mxx)/2; _cy=(_mny+_mxy)/2\n"
+            "        _sx=(_mxx-_mnx)+0.6; _sy=(_mxy-_mny)+0.6\n"
+            "    else:\n"
+            "        _cx=_cy=0; _sx=_sy=5\n"
+            "# Floor\n"
+            "bpy.ops.mesh.primitive_plane_add(size=1,location=(_cx,_cy,-0.03))\n"
+            "_fl=bpy.context.active_object; _fl.name='floor'\n"
+            "_fl.scale=(_sx/2,_sy/2,1)\n"
+            "_mat_fl=bpy.data.materials.get('Floor')\n"
+            "if _mat_fl: _fl.data.materials.append(_mat_fl)\n"
+            "# Ceiling\n"
+            "bpy.ops.mesh.primitive_plane_add(size=1,location=(_cx,_cy,_wh+0.03))\n"
+            "_cl=bpy.context.active_object; _cl.name='ceiling'\n"
+            "_cl.scale=(_sx/2,_sy/2,1)\n"
+            "_mat_cl=bpy.data.materials.get('Ceiling')\n"
+            "if _mat_cl: _cl.data.materials.append(_mat_cl)\n"
+            "print('STEP_RESULT:floor_and_ceiling_created')\n")
 
     elif operation == "cleanup_cutters":
         return (
@@ -484,21 +518,83 @@ class MCPBlenderTool(BlenderTool):
                 success=False, step_id=command.step_id, message=str(e)
             )
 
+    def _scene_setup_code(self) -> str:
+        """生成场景初始化代码（清空 + 灯光 + 材质），与 Background 模式对齐"""
+        return (
+            "import bpy\n"
+            "# === Clear scene ===\n"
+            "bpy.ops.object.select_all(action='SELECT')\n"
+            "bpy.ops.object.delete(use_global=False)\n"
+            "\n"
+            "# === World background ===\n"
+            "world = bpy.context.scene.world\n"
+            "world.use_nodes = True\n"
+            "bg_node = world.node_tree.nodes['Background']\n"
+            "bg_node.inputs[0].default_value = (0.95, 0.95, 0.95, 1.0)\n"
+            "bg_node.inputs[1].default_value = 1.5\n"
+            "\n"
+            "# === Sun light ===\n"
+            "bpy.ops.object.light_add(type='SUN', location=(15, -10, 25))\n"
+            "sun = bpy.context.active_object\n"
+            "sun.data.energy = 1.5\n"
+            "sun.data.angle = 0.1\n"
+            "\n"
+            "# === Fill light ===\n"
+            "bpy.ops.object.light_add(type='AREA', location=(-5, 10, 8))\n"
+            "fill = bpy.context.active_object\n"
+            "fill.data.energy = 60.0\n"
+            "fill.data.size = 10.0\n"
+            "\n"
+            "# === Top area light ===\n"
+            "bpy.ops.object.light_add(type='AREA', location=(0, 0, 6))\n"
+            "top = bpy.context.active_object\n"
+            "top.data.energy = 50.0\n"
+            "top.data.size = 10.0\n"
+            "\n"
+            "# === EEVEE settings ===\n"
+            "bpy.context.scene.render.engine = 'BLENDER_EEVEE'\n"
+            "try:\n"
+            "    bpy.context.scene.eevee.use_shadows = True\n"
+            "    bpy.context.scene.eevee.shadow_cube_size = '1024'\n"
+            "except AttributeError:\n"
+            "    pass\n"
+            "\n"
+            "# === Material library ===\n"
+            "def _make_mat(name, color, roughness=0.8):\n"
+            "    mat = bpy.data.materials.new(name)\n"
+            "    mat.diffuse_color = color\n"
+            "    mat.roughness = roughness\n"
+            "    return mat\n"
+            "_mat_wall = _make_mat('Wall', (0.82, 0.80, 0.78, 1.0), 0.9)\n"
+            "_mat_column = _make_mat('Column', (0.65, 0.63, 0.60, 1.0), 0.7)\n"
+            "_mat_window = _make_mat('Window', (0.30, 0.55, 0.75, 1.0), 0.3)\n"
+            "_mat_door = _make_mat('Door', (0.55, 0.35, 0.18, 1.0), 0.6)\n"
+            "_mat_glass = _make_mat('Glass', (0.65, 0.82, 0.95, 0.4), 0.1)\n"
+            "_mat_floor = _make_mat('Floor', (0.60, 0.58, 0.55, 1.0), 0.95)\n"
+            "_mat_ceiling = _make_mat('Ceiling', (0.92, 0.90, 0.88, 1.0), 0.9)\n"
+            "print('SCENE_SETUP:ok')\n"
+        )
+
     def execute_batch(
         self, commands: List[BlenderCommand]
     ) -> List[BlenderResult]:
-        """Batch execute: clear scene, then send each command."""
-        # Clear scene first (fresh start)
-        self._send_and_recv({
+        """主执行路径: MCP 模式批量执行。
+
+        1. 场景初始化（清空 + 灯光 + 材质）
+        2. 逐条执行建模和后处理命令
+        3. 返回结果列表
+
+        每步命令通过 _generate_bpy_for_command 生成独立 bpy 代码片段，
+        经 validate_params 净化参数后，通过 TCP 发送至 Blender MCP Add-on。
+        """
+        # === 场景初始化（与 Background 模式对齐） ===
+        print("[MCPBlenderTool] 初始化场景 (灯光 + 材质) ...")
+        setup_resp = self._send_and_recv({
             "type": "execute_code",
-            "params": {
-                "code": (
-                    "import bpy\n"
-                    "bpy.ops.object.select_all(action='SELECT')\n"
-                    "bpy.ops.object.delete(use_global=False)\n"
-                )
-            },
-        }, timeout=10)
+            "params": {"code": self._scene_setup_code()},
+        }, timeout=15)
+        if setup_resp.get("status") != "success":
+            print(f"[MCPBlenderTool] 场景初始化异常: {setup_resp.get('message', 'unknown')}")
 
         results = []
         for cmd in commands:

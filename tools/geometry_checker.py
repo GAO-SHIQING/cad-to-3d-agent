@@ -114,6 +114,128 @@ def check_dimensions(
     }
 
 
+def check_wall_closure(
+    cad_features: List[Dict[str, Any]],
+    tolerance_m: float = 0.5,
+) -> Dict[str, Any]:
+    """
+    检查墙体是否形成闭合空间。
+    判断标准：墙体端点是否成对靠近（每个交点至少2个端点）。
+    排除门窗洞口两侧的墙体间隙（洞口间隙是建模常态，非错误）。
+    """
+    import math
+
+    walls = [f for f in cad_features if f.get("type") == "wall"]
+    door_windows = [f for f in cad_features if f.get("type") in ("door", "window")]
+
+    if len(walls) < 2:
+        return {
+            "check": "wall_closure",
+            "passed": True,
+            "issues": [],
+        }
+
+    # 提取门窗位置（米制），用于判断间隙是否为洞口
+    opening_positions = []
+    for dw in door_windows:
+        geom = dw.get("geometry", {})
+        # door/window 可能在 geometry.center 或 geometry.location
+        pos = geom.get("center") or geom.get("location")
+        if pos and len(pos) >= 2:
+            opening_positions.append((float(pos[0]) / 1000, float(pos[1]) / 1000))
+
+    def _is_near_opening(x1, y1, x2, y2, max_gap_m: float = 1.5) -> bool:
+        """检查两点之间的间隙是否包含门窗洞口"""
+        gap = math.hypot(x2 - x1, y2 - y1)
+        if gap > max_gap_m:
+            return False
+        # 检查是否有门窗位于两点连线的附近
+        mid_x = (x1 + x2) / 2
+        mid_y = (y1 + y2) / 2
+        for ox, oy in opening_positions:
+            dist_to_mid = math.hypot(ox - mid_x, oy - mid_y)
+            if dist_to_mid < gap * 0.8:  # 门窗在间隙内
+                return True
+        return False
+
+    # 收集所有端点（米制）
+    endpoints = []
+    for i, w in enumerate(walls):
+        geom = w.get("geometry", {})
+        for key in ("start", "end"):
+            pt = geom.get(key)
+            if pt and len(pt) >= 2:
+                endpoints.append((i, key, float(pt[0]) / 1000, float(pt[1]) / 1000))
+
+    # 统计每个端点附近有多少其他端点
+    issues = []
+    for i, key, x, y in endpoints:
+        neighbor_count = 0
+        nearest_other = None  # (jx, jy, dist)
+        for j, jkey, jx, jy in endpoints:
+            if i == j and key == jkey:
+                continue
+            dist = math.hypot(x - jx, y - jy)
+            if dist <= tolerance_m:
+                neighbor_count += 1
+            elif nearest_other is None or dist < nearest_other[2]:
+                nearest_other = (jx, jy, dist)
+
+        if neighbor_count == 0:
+            # 检查是否为门窗洞口间隙
+            skip = False
+            if nearest_other and opening_positions:
+                skip = _is_near_opening(x, y, nearest_other[0], nearest_other[1])
+
+            if not skip:
+                issues.append({
+                    "severity": "error",
+                    "entity": f"wall_{i}",
+                    "description": f"墙体 wall_{i} 的 {key} 端点 ({x:.2f},{y:.2f}) 悬空"
+                                   f"，未连接到任何其他墙体",
+                    "suggestion": f"检查墙{i}的{key}坐标，使其与相邻墙体端点对齐",
+                })
+
+    return {
+        "check": "wall_closure",
+        "passed": len(issues) == 0,
+        "issues": issues,
+    }
+
+
+def check_floor_ceiling(
+    execution_results: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    检查是否生成了地面和天花板。
+    """
+    operations = [r.get("operation", "") for r in execution_results]
+    has_floor_ceiling = "create_floor_ceiling" in operations
+    has_join_merge = "join_and_merge" in operations
+
+    issues = []
+    if not has_join_merge:
+        issues.append({
+            "severity": "warning",
+            "entity": "walls",
+            "description": "墙体未执行网格合并 (join_and_merge)，可能存在缝隙",
+            "suggestion": "确保后处理管线包含 join_and_merge 步骤",
+        })
+    if not has_floor_ceiling:
+        issues.append({
+            "severity": "warning",
+            "entity": "floor/ceiling",
+            "description": "未生成地面和天花板",
+            "suggestion": "确保后处理管线包含 create_floor_ceiling 步骤",
+        })
+
+    return {
+        "check": "floor_ceiling",
+        "passed": len(issues) == 0,
+        "issues": issues,
+    }
+
+
 def run_geometry_checks(
     cad_features: List[Dict[str, Any]],
     execution_results: List[Dict[str, Any]],
@@ -122,6 +244,8 @@ def run_geometry_checks(
     checks = [
         check_entity_count(cad_features, execution_results),
         check_dimensions(cad_features, execution_results),
+        check_wall_closure(cad_features),
+        check_floor_ceiling(execution_results),
     ]
 
     all_issues = []
