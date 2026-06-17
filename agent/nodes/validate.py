@@ -94,6 +94,7 @@ def validate_node(state: AgentState) -> AgentState:
     combined_passed = False
     combined_confidence = 30.0
     combined_issues = []
+    partial_validation = False
 
     cad_b64 = render_dxf_to_base64(cad_path) if cad_path else None
     model_b64 = None
@@ -144,6 +145,7 @@ def validate_node(state: AgentState) -> AgentState:
             print(f"[validate] L2 Combined audit failed: {e}")
     else:
         print(f"[validate] L2 Skipped (CAD:{bool(cad_b64)}, 3D:{bool(model_b64)})")
+        partial_validation = True
 
     # ==================================================================
     # 质量评分与决策
@@ -152,7 +154,12 @@ def validate_node(state: AgentState) -> AgentState:
     state["quality_score"] = quality
 
     all_issues = geo_issues + combined_issues
-    overall_passed = quality >= threshold
+    blocking_errors = [issue for issue in geo_issues if issue.get("severity") == "error"]
+    geo_hard_pass = not blocking_errors
+    if partial_validation and geo_passed:
+        overall_passed = True
+    else:
+        overall_passed = geo_hard_pass and quality >= threshold
 
     state["validation_result"] = {
         "overall_passed": overall_passed,
@@ -162,9 +169,12 @@ def validate_node(state: AgentState) -> AgentState:
         "combined_passed": combined_passed,
         "combined_confidence": combined_confidence,
         "issues": all_issues,
+        "blocking_errors": blocking_errors,
         "revision": state["revision_count"],
+        "partial_validation": partial_validation,
     }
     state["validation_passed"] = overall_passed
+    state["partial_validation"] = partial_validation
 
     if overall_passed:
         print(f"[validate] QUALITY {quality} >= {threshold} -- PASS")
@@ -174,6 +184,7 @@ def validate_node(state: AgentState) -> AgentState:
     else:
         # 关键修复：将验证问题保存为 user_feedback，plan 节点将据此重新规划
         feedback = _format_feedback(all_issues)
+        state["user_confirmed"] = False
         state["user_feedback"] = feedback
         print(f"[validate] QUALITY {quality} < {threshold}, "
               f"feeding back to plan for round {state['revision_count'] + 1}")

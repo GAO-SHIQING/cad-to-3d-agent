@@ -58,6 +58,13 @@ def _check_path(v: Any, default: str) -> str:
     return v
 
 
+def _cube_scale_for_dimensions(width: float, depth: float, height: float) -> tuple[float, float, float]:
+    dims = (float(width), float(depth), float(height))
+    if any(d <= 0 for d in dims):
+        raise ValueError("cube dimensions must be positive")
+    return dims
+
+
 def validate_params(operation: str, params: dict) -> dict:
     """Validate and sanitize LLM-generated params for a given operation.
     Returns a clean dict; unknown keys are dropped, bad values replaced with
@@ -77,6 +84,8 @@ def validate_params(operation: str, params: dict) -> dict:
         clean["target_wall_id"] = _check_str_id(params.get("target_wall_id"), "wall_unknown")
         clean["dimensions"] = _check_num_list(params.get("dimensions"), 3, [1.0, 0.3, 2.1])
         clean["location"] = _check_num_list(params.get("location"), 3, [0, 0, 0])
+        clean["rotation_z"] = _check_num(params.get("rotation_z"), 0.0)
+        clean["wall_thickness"] = _check_num(params.get("wall_thickness"), 0.24)
 
     elif operation == "create_column":
         clean["location"] = _check_num_list(params.get("location"), 2, [0, 0])
@@ -158,7 +167,7 @@ def _generate_bpy_for_command(operation: str, params: dict, step_id: int) -> str
             "    bpy.ops.mesh.primitive_cube_add(size=1,"
             "location=(_s[0]+_dx/2,_s[1]+_dy/2,_h/2))\n"
             "    _o=bpy.context.active_object; _o.name=_wid\n"
-            "    _o.scale=(_len/2,_thk/2,_h/2); _o.rotation_euler.z=_ang\n"
+            "    _o.scale=(_len,_thk,_h); _o.rotation_euler.z=_ang\n"
             "    _mat=bpy.data.materials.get('Wall')\n"
             "    if _mat: _o.data.materials.append(_mat)\n"
             '    print("STEP_RESULT:"+_o.name)\n')
@@ -170,10 +179,12 @@ def _generate_bpy_for_command(operation: str, params: dict, step_id: int) -> str
         return (
             "import bpy, json\n"
             f"_tid=json.loads({tid_j!r}); _dims=json.loads({dims_j!r}); "
-            f"_loc=json.loads({loc_j!r})\n"
+            f"_loc=json.loads({loc_j!r}); _rot=json.loads({json.dumps(p.get('rotation_z', 0.0))!r}); "
+            f"_wall_thickness=json.loads({json.dumps(p.get('wall_thickness', 0.24))!r})\n"
             "bpy.ops.mesh.primitive_cube_add(size=1,location=_loc)\n"
             '_cutter=bpy.context.active_object; _cutter.name="cutter_temp"\n'
-            "_cutter.scale=(_dims[0]/2,_dims[1]/2,_dims[2]/2)\n"
+            "_cutter.scale=(_dims[0],max(_dims[1], _wall_thickness * 2.0, 0.5),_dims[2])\n"
+            "_cutter.rotation_euler.z=_rot\n"
             "_target=bpy.data.objects.get(_tid)\n"
             "if _target is None:\n"
             "    for _o in bpy.data.objects:\n"
@@ -214,8 +225,8 @@ def _generate_bpy_for_command(operation: str, params: dict, step_id: int) -> str
             geom = (f"bpy.ops.mesh.primitive_cube_add(size=1,"
                     f"location=(_loc[0],_loc[1],json.loads({height_j!r})/2));"
                     f"_o=bpy.context.active_object;"
-                    f"_o.scale=(json.loads({w_j!r})/2,json.loads({d_j!r})/2,"
-                    f"json.loads({height_j!r})/2)")
+                    f"_o.scale=(json.loads({w_j!r}),json.loads({d_j!r}),"
+                    f"json.loads({height_j!r}))")
         else:
             geom = (f"bpy.ops.mesh.primitive_cylinder_add(radius=0.15,"
                     f"depth=json.loads({height_j!r}),"
@@ -241,7 +252,7 @@ def _generate_bpy_for_command(operation: str, params: dict, step_id: int) -> str
             f"_rot=json.loads({rot_j!r})\n"
             "bpy.ops.mesh.primitive_cube_add(size=1,location=(_loc[0],_loc[1],_h/2))\n"
             "_o=bpy.context.active_object; _o.name=_did\n"
-            "_o.scale=(_w/2,0.05,_h/2); _o.rotation_euler.z=_rot\n"
+            "_o.scale=(_w,0.05,_h); _o.rotation_euler.z=_rot\n"
             "_mat=bpy.data.materials.get('Door')\n"
             "if _mat: _o.data.materials.append(_mat)\n"
             'print("STEP_RESULT:"+_o.name)\n')
@@ -260,7 +271,7 @@ def _generate_bpy_for_command(operation: str, params: dict, step_id: int) -> str
             "bpy.ops.mesh.primitive_cube_add(size=1,"
             "location=(_loc[0],_loc[1],_sill+_h/2))\n"
             "_o=bpy.context.active_object; _o.name=_wid\n"
-            "_o.scale=(_w/2,0.1,_h/2)\n"
+            "_o.scale=(_w,0.1,_h)\n"
             "_mat=bpy.data.materials.get('Window')\n"
             "if _mat: _o.data.materials.append(_mat)\n"
             'print("STEP_RESULT:"+_o.name)\n')
@@ -316,13 +327,13 @@ def _generate_bpy_for_command(operation: str, params: dict, step_id: int) -> str
             "# Floor\n"
             "bpy.ops.mesh.primitive_plane_add(size=1,location=(_cx,_cy,-0.03))\n"
             "_fl=bpy.context.active_object; _fl.name='floor'\n"
-            "_fl.scale=(_sx/2,_sy/2,1)\n"
+            "_fl.scale=(_sx,_sy,1)\n"
             "_mat_fl=bpy.data.materials.get('Floor')\n"
             "if _mat_fl: _fl.data.materials.append(_mat_fl)\n"
             "# Ceiling\n"
             "bpy.ops.mesh.primitive_plane_add(size=1,location=(_cx,_cy,_wh+0.03))\n"
             "_cl=bpy.context.active_object; _cl.name='ceiling'\n"
-            "_cl.scale=(_sx/2,_sy/2,1)\n"
+            "_cl.scale=(_sx,_sy,1)\n"
             "_mat_cl=bpy.data.materials.get('Ceiling')\n"
             "if _mat_cl: _cl.data.materials.append(_mat_cl)\n"
             "print('STEP_RESULT:floor_and_ceiling_created')\n")
@@ -575,6 +586,44 @@ class MCPBlenderTool(BlenderTool):
             "print('SCENE_SETUP:ok')\n"
         )
 
+    def _scene_summary_code(self) -> str:
+        """生成场景摘要代码，用于诊断对象尺寸和墙体连通性。"""
+        return (
+            "import bpy, json\n"
+            "def _component_count(obj):\n"
+            "    mesh = obj.data\n"
+            "    if len(mesh.vertices) == 0:\n"
+            "        return 0\n"
+            "    adj = {i: set() for i in range(len(mesh.vertices))}\n"
+            "    for edge in mesh.edges:\n"
+            "        a, b = edge.vertices\n"
+            "        adj[a].add(b); adj[b].add(a)\n"
+            "    seen = set(); count = 0\n"
+            "    for vertex in adj:\n"
+            "        if vertex in seen:\n"
+            "            continue\n"
+            "        count += 1\n"
+            "        stack = [vertex]; seen.add(vertex)\n"
+            "        while stack:\n"
+            "            current = stack.pop()\n"
+            "            for nxt in adj[current]:\n"
+            "                if nxt not in seen:\n"
+            "                    seen.add(nxt); stack.append(nxt)\n"
+            "    return count\n"
+            "summary = {'objects': []}\n"
+            "for obj in bpy.data.objects:\n"
+            "    entry = {\n"
+            "        'name': obj.name,\n"
+            "        'type': obj.type,\n"
+            "        'location': [round(obj.location.x, 6), round(obj.location.y, 6), round(obj.location.z, 6)],\n"
+            "        'dimensions': [round(obj.dimensions.x, 6), round(obj.dimensions.y, 6), round(obj.dimensions.z, 6)],\n"
+            "    }\n"
+            "    if obj.type == 'MESH':\n"
+            "        entry['component_count'] = _component_count(obj)\n"
+            "    summary['objects'].append(entry)\n"
+            "print('SCENE_SUMMARY:' + json.dumps(summary, ensure_ascii=False))\n"
+        )
+
     def execute_batch(
         self, commands: List[BlenderCommand]
     ) -> List[BlenderResult]:
@@ -603,6 +652,23 @@ class MCPBlenderTool(BlenderTool):
             status = "[PASS] " if result.success else "[FAIL] "
             print(f"[MCPBlenderTool] {status} step {cmd.step_id}: "
                   f"{cmd.operation} → {result.message}")
+
+        summary_resp = self._send_and_recv({
+            "type": "execute_code",
+            "params": {"code": self._scene_summary_code()},
+        }, timeout=15)
+        if summary_resp.get("status") == "success":
+            result_text = summary_resp.get("result", {}).get("result", "")
+            for line in result_text.split("\n"):
+                if line.startswith("SCENE_SUMMARY:"):
+                    try:
+                        scene_summary = json.loads(line.split(":", 1)[1])
+                    except json.JSONDecodeError:
+                        scene_summary = None
+                    if scene_summary is not None:
+                        for r in results:
+                            r.output = {"scene_summary": scene_summary}
+                    break
         return results
 
     def render_viewport(

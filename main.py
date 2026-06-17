@@ -22,17 +22,48 @@ def make_initial_state(dxf_path: str, instruction: str, mode: str) -> AgentState
         "modeling_plan": [],
         "user_confirmed": False,
         "user_feedback": "",
+        "planning_errors": [],
+        "planning_warnings": [],
         "execution_mode": mode,
         "current_step": 0,
         "execution_results": [],
         "blender_output_path": "",
         "render_images": [],
+        "coordinate_offset": {"x": 0.0, "y": 0.0},
+        "partial_validation": False,
+        "scene_summary": {},
         "validation_result": {},
         "revision_count": 0,
         "max_revisions": Config.MAX_REVISIONS,
         "quality_score": 0.0,
         "validation_passed": False,
     }
+
+
+def confirmation_update_for_state(
+    values: dict,
+    *,
+    auto_confirm: bool,
+    choice: str,
+) -> dict:
+    """根据当前 interrupt state 和用户选择生成确认状态更新。"""
+    plan = values.get("modeling_plan", [])
+    planning_errors = values.get("planning_errors", [])
+    if not plan and planning_errors:
+        return {
+            "user_confirmed": False,
+            "user_feedback": "\n".join(planning_errors),
+        }
+
+    if auto_confirm:
+        return {"user_confirmed": True, "user_feedback": ""}
+
+    lowered = choice.strip().lower()
+    if lowered in ("y", "yes", ""):
+        return {"user_confirmed": True, "user_feedback": ""}
+    if lowered in ("n", "no"):
+        return {"user_confirmed": False, "user_feedback": "REDO"}
+    return {"user_confirmed": False, "user_feedback": choice.strip()}
 
 
 def run_with_interrupts(app, initial_state: AgentState, auto_confirm: bool = False):
@@ -48,22 +79,29 @@ def run_with_interrupts(app, initial_state: AgentState, auto_confirm: bool = Fal
     # 处理 interrupt (confirm 节点暂停)
     state = app.get_state(config)
     while state.next:
+        plan = state.values.get("modeling_plan", [])
+        planning_errors = state.values.get("planning_errors", [])
         if auto_confirm:
-            print("\n[auto] 自动批准建模计划，继续执行...")
-            app.update_state(config, {"user_confirmed": True, "user_feedback": ""})
+            if planning_errors and not plan:
+                print("\n[auto] 规划无效，返回重新规划...")
+            else:
+                print("\n[auto] 自动批准建模计划，继续执行...")
+            app.update_state(
+                config,
+                confirmation_update_for_state(state.values, auto_confirm=True, choice=""),
+            )
         else:
             # 展示计划并等待用户输入
-            plan = state.values.get("modeling_plan", [])
             print("\n" + "=" * 60)
             print(f"[计划]  建模计划（共 {len(plan)} 步）")
             print("=" * 60)
             for step in plan:
                 print(f"  步骤 {step.get('step_id', '?')}: {step.get('operation', '?')}")
-            choice = input("\n[y] 批准 / [n] 重做: ").strip().lower()
-            if choice in ("y", "yes", ""):
-                app.update_state(config, {"user_confirmed": True, "user_feedback": ""})
-            else:
-                app.update_state(config, {"user_confirmed": False, "user_feedback": "REDO"})
+            choice = input("\n[y] 批准 / [n] 重做 / [修改内容]: ").strip()
+            app.update_state(
+                config,
+                confirmation_update_for_state(state.values, auto_confirm=False, choice=choice),
+            )
 
         # 继续执行
         for event in app.stream(None, config, stream_mode="updates"):

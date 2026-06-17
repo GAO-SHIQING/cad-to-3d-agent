@@ -8,6 +8,7 @@ def create_client() -> OpenAI:
     return OpenAI(
         api_key=Config.OPENAI_API_KEY,
         base_url=Config.OPENAI_BASE_URL,
+        timeout=Config.LLM_TIMEOUT,
     )
 
 

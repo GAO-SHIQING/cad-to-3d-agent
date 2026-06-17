@@ -4,7 +4,7 @@ import json
 from ..state import AgentState
 from ..llm import chat_with_vision
 from ..prompts import PARSE_SYSTEM_PROMPT
-from tools.cad_parser import extract_geometry, cluster_by_spatial
+from tools.cad_parser import extract_geometry, cluster_by_spatial, infer_features_from_geometry
 from tools.dxf_viewer import render_dxf_to_base64
 from tools.wall_topology import cluster_wall_endpoints
 
@@ -59,41 +59,36 @@ def parse_cad_node(state: AgentState) -> AgentState:
         "- 柱表现为独立的矩形或圆形截面\n\n"
         "请按照系统指令的 JSON 格式输出所有识别的实体。"
     )
-    response = chat_with_vision(
-        system_prompt=PARSE_SYSTEM_PROMPT,
-        user_message=user_message,
-        image_base64=image_b64,
-        max_tokens=4096,
-    )
-
-    response = response.strip()
-    if response.startswith("```"):
-        response = response.strip("```").strip()
-        if response.startswith("json"):
-            response = response[4:].strip()
-
     try:
+        response = chat_with_vision(
+            system_prompt=PARSE_SYSTEM_PROMPT,
+            user_message=user_message,
+            image_base64=image_b64,
+            max_tokens=4096,
+        )
+
+        response = response.strip()
+        if response.startswith("```"):
+            response = response.strip("```").strip()
+            if response.startswith("json"):
+                response = response[4:].strip()
+
         features = json.loads(response)
         if isinstance(features, dict):
             features = [features]
         print(f"[parse] Vision LLM 识别出 {len(features)} 个建筑实体")
+        should_snap_wall_endpoints = True
 
+    except Exception as e:
+        print(f"[parse] Vision LLM 失败，启用确定性兜底: {e}")
+        features = infer_features_from_geometry(raw)
+        should_snap_wall_endpoints = False
+        print(f"[parse] 几何兜底识别出 {len(features)} 个建筑实体")
+
+    if features and should_snap_wall_endpoints:
         # === 墙体拓扑推断：端点聚类归并 ===
         # Vision LLM 提取的坐标天然有误差，需将相近端点归并为共享角点
         features = cluster_wall_endpoints(features)
-        state["cad_features"] = features
-
-    except json.JSONDecodeError as e:
-        print(f"[parse] Vision LLM 返回格式错误: {e}")
-        print(f"[parse] 原始响应: {response[:500]}")
-        # 降级：使用原始几何数据（不带语义标签）
-        state["cad_features"] = [
-            {
-                "type": "unknown",
-                "geometry": {"vertices": ent.get("vertices", [])},
-                "properties": ent.get("properties", {}),
-            }
-            for ent in main_cluster[:50]
-        ]
+    state["cad_features"] = features
 
     return state

@@ -10,6 +10,7 @@ class Config:
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
     LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-5.5")
+    LLM_TIMEOUT: float = float(os.getenv("LLM_TIMEOUT", "90"))
     BLENDER_EXECUTABLE: str = os.getenv("BLENDER_EXECUTABLE", "blender")
     MCP_HOST: str = os.getenv("MCP_HOST", "localhost")
     MCP_PORT: int = int(os.getenv("MCP_PORT", "9876"))

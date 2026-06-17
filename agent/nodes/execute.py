@@ -10,6 +10,11 @@ from tools.background_adapter import BackgroundBlenderTool
 from tools.mcp_adapter import MCPBlenderTool
 from ..config import Config
 from tools.wall_topology import infer_floor_bounds
+from tools.coordinate_transform import (
+    apply_offset_to_bounds,
+    apply_offset_to_commands,
+    compute_offset,
+)
 
 
 def _create_tool(mode: str) -> BlenderTool:
@@ -91,33 +96,6 @@ def _plan_to_commands(plan: list[dict]) -> list[BlenderCommand]:
             step_id=step.get("step_id", 0),
         ))
     return commands
-
-
-def _normalize_coordinates(commands: list[BlenderCommand]) -> tuple[float, float]:
-    """将 DXF 坐标归一化到原点附近，返回偏移量 (offset_x, offset_y)"""
-    all_x, all_y = [], []
-    for cmd in commands:
-        p = cmd.params
-        for key in ("start", "end", "location", "loc", "position"):
-            if key in p and isinstance(p[key], (list, tuple)) and len(p[key]) >= 2:
-                all_x.append(p[key][0])
-                all_y.append(p[key][1])
-
-    if not all_x:
-        return (0.0, 0.0)
-
-    offset_x = min(all_x)
-    offset_y = min(all_y)
-
-    for cmd in commands:
-        p = cmd.params
-        for key in ("start", "end", "location", "loc", "position"):
-            if key in p and isinstance(p[key], (list, tuple)) and len(p[key]) >= 2:
-                p[key][0] -= offset_x
-                p[key][1] -= offset_y
-
-    print(f"[execute] 坐标归一化: offset=({offset_x:.1f}, {offset_y:.1f})")
-    return (offset_x, offset_y)
 
 
 def _create_post_processing_commands(
@@ -236,13 +214,17 @@ def execute_node(state: AgentState) -> AgentState:
 
     commands = _plan_to_commands(plan)
 
-    # === 坐标归一化（DXF mm 坐标 → Blender 米制原点） ===
-    _normalize_coordinates(commands)
+    # === 坐标归一化（模型坐标平移到原点附近） ===
+    offset = compute_offset(commands)
+    commands = apply_offset_to_commands(commands, offset)
+    state["coordinate_offset"] = {"x": offset[0], "y": offset[1]}
+    print(f"[execute] 坐标归一化: offset=({offset[0]:.3f}, {offset[1]:.3f})")
 
     # === 追加后处理命令 ===
     max_step_id = max(c.step_id for c in commands) if commands else 0
     cad_features = state.get("cad_features", [])
     floor_info = infer_floor_bounds(cad_features)
+    floor_info = apply_offset_to_bounds(floor_info, offset)
     wall_height = floor_info.get("wall_height", 2.8) if floor_info else 2.8
     post_commands = _create_post_processing_commands(
         max_step_id, Config.OUTPUT_DIR, floor_info, wall_height
@@ -323,6 +305,11 @@ def execute_node(state: AgentState) -> AgentState:
 
     try:
         state["execution_results"] = results
+        for r in results:
+            output = r.get("output") if isinstance(r, dict) else None
+            if isinstance(output, dict) and output.get("scene_summary"):
+                state["scene_summary"] = output["scene_summary"]
+                break
 
         # 不同模式下 render_viewport 行为不同：
         #   MCP 模式: 返回 None（渲染由 Background 管线的 render 命令完成）

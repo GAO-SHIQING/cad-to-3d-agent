@@ -13,6 +13,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from agent.config import Config
 
 
+def _cube_scale_for_dimensions(width: float, depth: float, height: float) -> tuple[float, float, float]:
+    """Blender primitive_cube_add(size=1) 时 scale 等于最终尺寸。"""
+    dims = (float(width), float(depth), float(height))
+    if any(d <= 0 for d in dims):
+        raise ValueError("cube dimensions must be positive")
+    return dims
+
+
 # === Blender Python script template (run inside blender --background --python) ===
 
 BPY_SCRIPT_TEMPLATE = r'''
@@ -116,7 +124,7 @@ for cmd in commands:
                 )
                 obj = bpy.context.active_object
                 obj.name = params.get("wall_id", f"wall_{step_id:02d}")
-                obj.scale = (length / 2, thickness / 2, height / 2)
+                obj.scale = (length, thickness, height)
                 obj.rotation_euler.z = angle
                 obj.data.materials.append(_mat_wall)
                 name = obj.name
@@ -125,6 +133,8 @@ for cmd in commands:
             target_id = params.get("target_wall_id", "")
             dims = params.get("dimensions", [1, 0.3, 2.1])
             loc = params.get("location", [0, 0, 0])
+            rotation = params.get("rotation_z", 0.0)
+            wall_thickness = params.get("wall_thickness", 0.24)
 
             target = bpy.data.objects.get(target_id)
             if target is None:
@@ -134,11 +144,12 @@ for cmd in commands:
                         break
 
             # Force cutter depth to fully penetrate wall (min 0.5m wall-normal)
-            cut_depth = max(dims[1], 0.5)
+            cut_depth = max(dims[1], wall_thickness * 2.0, 0.5)
             bpy.ops.mesh.primitive_cube_add(size=1, location=loc)
             cutter = bpy.context.active_object
             cutter.name = "cutter_temp"
-            cutter.scale = (dims[0] / 2, cut_depth / 2, dims[2] / 2)
+            cutter.scale = (dims[0], cut_depth, dims[2])
+            cutter.rotation_euler.z = rotation
 
             if target:
                 mod = target.modifiers.new(name="bool_cut", type='BOOLEAN')
@@ -184,7 +195,7 @@ for cmd in commands:
                     size=1, location=(loc[0], loc[1], height / 2),
                 )
                 obj = bpy.context.active_object
-                obj.scale = (width / 2, depth / 2, height / 2)
+                obj.scale = (width, depth, height)
             else:
                 bpy.ops.mesh.primitive_cylinder_add(
                     radius=0.15, depth=height,
@@ -212,7 +223,7 @@ for cmd in commands:
             )
             obj = bpy.context.active_object
             obj.name = door_id
-            obj.scale = (width / 2, door_thick / 2, height / 2)
+            obj.scale = (width, door_thick, height)
             obj.rotation_euler.z = wall_angle
             obj.data.materials.append(_mat_door)
             name = obj.name
@@ -232,7 +243,7 @@ for cmd in commands:
             )
             obj = bpy.context.active_object
             obj.name = win_id
-            obj.scale = (width / 2, frame_depth / 2, height / 2)
+            obj.scale = (width, frame_depth, height)
             obj.rotation_euler.z = params.get("rotation_z", 0)
             obj.data.materials.append(_mat_window)
             name = obj.name
@@ -304,7 +315,7 @@ for cmd in commands:
             )
             floor = bpy.context.active_object
             floor.name = "floor"
-            floor.scale = (sx / 2, sy / 2, 1)
+            floor.scale = (sx, sy, 1)
             floor.data.materials.append(_mat_floor)
 
             # Ceiling: plane at z = wall_height + 0.03
@@ -314,7 +325,7 @@ for cmd in commands:
             )
             ceiling = bpy.context.active_object
             ceiling.name = "ceiling"
-            ceiling.scale = (sx / 2, sy / 2, 1)
+            ceiling.scale = (sx, sy, 1)
             ceiling.data.materials.append(_mat_ceiling)
 
             name = "floor_and_ceiling_created"
@@ -398,8 +409,48 @@ for cmd in commands:
             "message": str(e),
         })
 
+def _component_count(obj):
+    mesh = obj.data
+    if len(mesh.vertices) == 0:
+        return 0
+    adj = {i: set() for i in range(len(mesh.vertices))}
+    for edge in mesh.edges:
+        a, b = edge.vertices
+        adj[a].add(b)
+        adj[b].add(a)
+    seen = set()
+    count = 0
+    for vertex in adj:
+        if vertex in seen:
+            continue
+        count += 1
+        stack = [vertex]
+        seen.add(vertex)
+        while stack:
+            current = stack.pop()
+            for nxt in adj[current]:
+                if nxt not in seen:
+                    seen.add(nxt)
+                    stack.append(nxt)
+    return count
+
+scene_summary = {
+    "objects": [],
+}
+for obj in bpy.data.objects:
+    entry = {
+        "name": obj.name,
+        "type": obj.type,
+        "location": [round(obj.location.x, 6), round(obj.location.y, 6), round(obj.location.z, 6)],
+        "dimensions": [round(obj.dimensions.x, 6), round(obj.dimensions.y, 6), round(obj.dimensions.z, 6)],
+    }
+    if obj.type == 'MESH':
+        entry["component_count"] = _component_count(obj)
+    scene_summary["objects"].append(entry)
+
 # Output results JSON
 print("BLENDER_RESULTS:" + json.dumps(results, ensure_ascii=False))
+print("BLENDER_SCENE_SUMMARY:" + json.dumps(scene_summary, ensure_ascii=False))
 '''
 
 
@@ -474,6 +525,7 @@ class BackgroundBlenderTool(BlenderTool):
             )
 
             results: List[BlenderResult] = []
+            scene_summary = None
             for line in result.stdout.split("\n"):
                 if line.startswith("BLENDER_RESULTS:"):
                     try:
@@ -486,6 +538,11 @@ class BackgroundBlenderTool(BlenderTool):
                             ))
                     except json.JSONDecodeError:
                         pass
+                elif line.startswith("BLENDER_SCENE_SUMMARY:"):
+                    try:
+                        scene_summary = json.loads(line.split(":", 1)[1])
+                    except json.JSONDecodeError:
+                        scene_summary = None
 
             # Log debug lines
             for line in result.stdout.split("\n"):
@@ -504,6 +561,10 @@ class BackgroundBlenderTool(BlenderTool):
                     )
                     for c in commands
                 ]
+
+            if scene_summary is not None:
+                for r in results:
+                    r.output = {"scene_summary": scene_summary}
 
             return results
 

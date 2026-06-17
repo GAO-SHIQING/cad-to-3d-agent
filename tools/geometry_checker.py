@@ -136,25 +136,40 @@ def check_wall_closure(
         }
 
     # 提取门窗位置（米制），用于判断间隙是否为洞口
-    opening_positions = []
+    opening_infos = []
     for dw in door_windows:
         geom = dw.get("geometry", {})
-        # door/window 可能在 geometry.center 或 geometry.location
+        props = dw.get("properties", {})
+        # door/window 可能在 geometry.center、geometry.location 或 vertices 中
         pos = geom.get("center") or geom.get("location")
+        if not pos and geom.get("vertices"):
+            verts = geom.get("vertices")
+            xs = [float(v[0]) for v in verts if isinstance(v, (list, tuple)) and len(v) >= 2]
+            ys = [float(v[1]) for v in verts if isinstance(v, (list, tuple)) and len(v) >= 2]
+            if xs and ys:
+                pos = [(min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2]
         if pos and len(pos) >= 2:
-            opening_positions.append((float(pos[0]) / 1000, float(pos[1]) / 1000))
+            width_mm = props.get("width")
+            if width_mm is None and geom.get("vertices"):
+                verts = geom.get("vertices")
+                xs = [float(v[0]) for v in verts if isinstance(v, (list, tuple)) and len(v) >= 2]
+                ys = [float(v[1]) for v in verts if isinstance(v, (list, tuple)) and len(v) >= 2]
+                if xs and ys:
+                    width_mm = max(max(xs) - min(xs), max(ys) - min(ys))
+            width_m = float(width_mm) / 1000 if width_mm is not None else 1.5
+            allowed_gap_m = max(1.5, width_m * 1.1 + 0.1)
+            opening_infos.append((float(pos[0]) / 1000, float(pos[1]) / 1000, allowed_gap_m))
 
-    def _is_near_opening(x1, y1, x2, y2, max_gap_m: float = 1.5) -> bool:
+    def _is_near_opening(x1, y1, x2, y2) -> bool:
         """检查两点之间的间隙是否包含门窗洞口"""
         gap = math.hypot(x2 - x1, y2 - y1)
-        if gap > max_gap_m:
-            return False
-        # 检查是否有门窗位于两点连线的附近
         mid_x = (x1 + x2) / 2
         mid_y = (y1 + y2) / 2
-        for ox, oy in opening_positions:
+        for ox, oy, allowed_gap_m in opening_infos:
+            if gap > allowed_gap_m:
+                continue
             dist_to_mid = math.hypot(ox - mid_x, oy - mid_y)
-            if dist_to_mid < gap * 0.8:  # 门窗在间隙内
+            if dist_to_mid < max(gap * 0.8, 0.25):  # 门窗在间隙内
                 return True
         return False
 
@@ -184,7 +199,7 @@ def check_wall_closure(
         if neighbor_count == 0:
             # 检查是否为门窗洞口间隙
             skip = False
-            if nearest_other and opening_positions:
+            if nearest_other and opening_infos:
                 skip = _is_near_opening(x, y, nearest_other[0], nearest_other[1])
 
             if not skip:
@@ -236,17 +251,57 @@ def check_floor_ceiling(
     }
 
 
+def check_scene_wall_components(scene_summary: Dict[str, Any]) -> Dict[str, Any]:
+    """检查墙体对象是否合理合并。"""
+    wall_objects = [obj for obj in scene_summary.get("objects", []) if str(obj.get("name", "")).startswith("wall")]
+    issues = []
+
+    if len(wall_objects) > 1:
+        issues.append({
+            "severity": "error",
+            "entity": "walls",
+            "description": f"墙体仍然拆成 {len(wall_objects)} 个对象，未完成合并",
+            "suggestion": "检查 join_and_merge 是否生效，以及墙体命名是否统一",
+        })
+    elif wall_objects:
+        obj = wall_objects[0]
+        count = int(obj.get("component_count", 1))
+        if count > 1:
+            issues.append({
+                "severity": "warning",
+                "entity": obj.get("name", "wall"),
+                "description": f"墙体网格包含 {count} 个不连通分量，但已合并为单个对象",
+                "suggestion": "如视觉上仍有裂缝，可继续检查端点对齐和 remove_doubles 阈值",
+            })
+
+    return {
+        "check": "scene_wall_components",
+        "passed": not any(issue.get("severity") == "error" for issue in issues),
+        "issues": issues,
+    }
+
+
 def run_geometry_checks(
     cad_features: List[Dict[str, Any]],
     execution_results: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """运行所有几何检查，返回汇总报告"""
+    scene_summary = None
+    for result in execution_results:
+        output = result.get("output", {}) if isinstance(result, dict) else {}
+        if isinstance(output, dict) and output.get("scene_summary"):
+            scene_summary = output["scene_summary"]
+            break
+
     checks = [
         check_entity_count(cad_features, execution_results),
         check_dimensions(cad_features, execution_results),
         check_wall_closure(cad_features),
         check_floor_ceiling(execution_results),
     ]
+
+    if scene_summary:
+        checks.append(check_scene_wall_components(scene_summary))
 
     all_issues = []
     for check in checks:
@@ -258,4 +313,6 @@ def run_geometry_checks(
         "geometry_passed": passed,
         "checks": checks,
         "issues": all_issues,
+        "blocking_errors": [issue for issue in all_issues if issue.get("severity") == "error"],
+        "warnings": [issue for issue in all_issues if issue.get("severity") == "warning"],
     }

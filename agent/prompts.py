@@ -103,6 +103,8 @@ PLAN_SYSTEM_PROMPT = """你是一个 Blender 建筑建模专家。
 4. 每个操作必须包含 depends_on 字段（依赖的前置步骤 step_id 列表）
 5. 坐标单位转换为米（DXF 毫米值 / 1000）
 6. 操作命名约定：wall_01, door_01, window_01, column_01 ...
+7. 每个 door/window 实体必须先生成 boolean_cut 开洞步骤，再生成 place_door/place_window 构件步骤；构件步骤必须依赖对应的开洞步骤
+8. boolean_cut 的 target_wall_id 必须指向承载该门窗的墙体，location 必须与门窗中心一致，dimensions[1] 必须大于墙厚以完全贯穿墙体
 
 ## 输出格式
 返回 JSON 数组：

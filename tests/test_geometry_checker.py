@@ -121,6 +121,54 @@ def test_check_wall_closure_isolated_walls():
     assert len(result["issues"]) == 4
 
 
+def test_check_wall_closure_allows_door_gap_between_collinear_walls():
+    """门洞两侧墙段端点间隙应被识别为开口，不应报悬空。"""
+    features = [
+        {"type": "wall", "geometry": {"start": [0, 0], "end": [2500, 0]}},
+        {"type": "wall", "geometry": {"start": [3500, 0], "end": [6000, 0]}},
+        {"type": "wall", "geometry": {"start": [6000, 0], "end": [6000, 4000]}},
+        {"type": "wall", "geometry": {"start": [6000, 4000], "end": [0, 4000]}},
+        {"type": "wall", "geometry": {"start": [0, 4000], "end": [0, 0]}},
+        {"type": "door", "geometry": {"center": [3000, 0]}, "properties": {"width": 1000}},
+    ]
+
+    result = check_wall_closure(features, tolerance_m=0.5)
+
+    assert result["passed"] is True
+
+
+def test_check_wall_closure_allows_opening_gap_from_vertices_without_center():
+    """Vision 结果可能只有 vertices，没有 center，也应识别门洞间隙。"""
+    features = [
+        {"type": "wall", "geometry": {"start": [0, 0], "end": [2500, 0]}},
+        {"type": "wall", "geometry": {"start": [3500, 0], "end": [6000, 0]}},
+        {"type": "wall", "geometry": {"start": [6000, 0], "end": [6000, 4000]}},
+        {"type": "wall", "geometry": {"start": [6000, 4000], "end": [0, 4000]}},
+        {"type": "wall", "geometry": {"start": [0, 4000], "end": [0, 0]}},
+        {"type": "door", "geometry": {"vertices": [[2500, 0], [3500, 0]]}, "properties": {"width": 1000}},
+    ]
+
+    result = check_wall_closure(features, tolerance_m=0.5)
+
+    assert result["passed"] is True
+
+
+def test_check_wall_closure_allows_wide_opening_gap_from_properties():
+    """1.6m 左右的窗洞/门洞不能因为固定 1.5m 阈值被误判为悬空墙端。"""
+    features = [
+        {"type": "wall", "geometry": {"start": [0, 0], "end": [2200, 0]}},
+        {"type": "wall", "geometry": {"start": [3800, 0], "end": [6000, 0]}},
+        {"type": "wall", "geometry": {"start": [6000, 0], "end": [6000, 4000]}},
+        {"type": "wall", "geometry": {"start": [6000, 4000], "end": [0, 4000]}},
+        {"type": "wall", "geometry": {"start": [0, 4000], "end": [0, 0]}},
+        {"type": "window", "geometry": {"center": [3000, 0]}, "properties": {"width": 1600}},
+    ]
+
+    result = check_wall_closure(features, tolerance_m=0.5)
+
+    assert result["passed"] is True
+
+
 def test_check_floor_ceiling_present():
     """后处理包含 floor/ceiling — 通过"""
     results = [
