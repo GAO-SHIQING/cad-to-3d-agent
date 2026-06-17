@@ -63,7 +63,7 @@ source .venv/bin/activate    # Linux/macOS
 pip install -r requirements.txt
 ```
 
-应安装 6 个包：langgraph、langgraph-checkpoint、openai、ezdxf、python-dotenv、pytest
+应安装 7 个包：langgraph、langgraph-checkpoint、openai、ezdxf、python-dotenv、matplotlib、pytest
 
 ### 2.4 验证安装
 
@@ -127,7 +127,7 @@ python -c "from agent.config import Config; print(Config.LLM_MODEL); Config.vali
 python -m pytest tests/ -v
 ```
 
-应输出 16 passed
+应输出 73 passed
 
 ### 4.2 验证图形
 
@@ -148,7 +148,7 @@ for e in entities:
 "
 ```
 
-应输出 7 个实体（6 LINE + 1 CIRCLE）
+应输出 53 个实体（52 LINE + 1 INSERT）
 
 ### 4.4 验证 LLM 连接
 
@@ -218,21 +218,29 @@ ls -la output/render_*.png
 
 ## 七、其他运行方式
 
-### 7.1 MCP 模式（开发调试，逐步执行）
-
-先启动 Blender 并加载 MCP add-on，然后：
+### 7.1 Background 模式（subprocess 无头执行，无需启动 Blender GUI）
 
 ```bash
-python main.py examples/single_room.dxf --mode mcp
+python main.py examples/single_room.dxf --mode background
 ```
 
-### 7.2 带额外指令
+适合不需要逐步调试、一条命令直接出结果的场景。默认模式为 `mcp`（通过 TCP 连接 Blender MCP Add-on）。
+
+### 7.2 自动批准建模计划
+
+```bash
+python main.py examples/single_room.dxf --auto-confirm
+```
+
+跳过人工确认步骤，LLM 规划后自动执行。
+
+### 7.3 带额外指令
 
 ```bash
 python main.py examples/single_room.dxf --instruction "层高改为3米，墙体厚度改为200mm"
 ```
 
-### 7.3 用自己的 DXF 文件
+### 7.4 用自己的 DXF 文件
 
 ```bash
 python main.py /path/to/your/building.dxf
@@ -248,4 +256,4 @@ python main.py /path/to/your/building.dxf
 | LLM 调用超时/报错 | `.env` 中 API key 是否正确、网络是否通 |
 | Blender 执行失败 | `blender --version` 是否正常、Blender 版本是否 ≥3.6 |
 | DXF 文件解析为空 | DXF 是否包含 ENTITIES section、用 ezdxf 命令行工具检查：`ezdxf audit your_file.dxf` |
-| 16 测试有失败 | `git status` 检查是不是有文件被意外修改 |
+| 73 测试有失败 | `git status` 检查是不是有文件被意外修改 |
