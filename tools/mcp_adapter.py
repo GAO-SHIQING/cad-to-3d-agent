@@ -10,11 +10,16 @@ Numeric fields are type-checked; string IDs are regex-validated; complex data
 """
 
 import json
+import os
 import re
 import socket
 from typing import List, Any, Dict
 from .blender_tool import BlenderTool, BlenderCommand, BlenderResult
 from .blender_snippets import scene_setup_code, scene_summary_code
+
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from agent.config import Config
 
 # ── Validation ──────────────────────────────────────────────────────────────
 
@@ -49,14 +54,23 @@ def _check_str_id(v: Any, default: str) -> str:
     return default
 
 
-def _check_path(v: Any, default: str) -> str:
-    """Validate v is a filesystem-safe path string (no shell metacharacters)."""
+def _check_path(v: Any, default: str, base_dir: str) -> str:
+    """Validate v is a filesystem-safe path within base_dir (no traversal).
+
+    Resolves the path against base_dir and verifies it stays within bounds.
+    Returns the resolved absolute path on success, or default on failure.
+    """
     if not isinstance(v, str):
         return default
     # Reject paths containing shell-injection characters
     if any(c in v for c in (';', '|', '&', '$', '`', '(', ')', '<', '>')):
         return default
-    return v
+    # Resolve and verify path stays within base_dir
+    resolved = os.path.realpath(os.path.join(base_dir, v))
+    real_base = os.path.realpath(base_dir)
+    if not (resolved == real_base or resolved.startswith(real_base + os.sep)):
+        return default
+    return resolved
 
 
 def _cube_scale_for_dimensions(width: float, depth: float, height: float) -> tuple[float, float, float]:
@@ -127,11 +141,11 @@ def validate_params(operation: str, params: dict) -> dict:
 
     elif operation == "save_blend":
         clean["filepath"] = _check_path(params.get("filepath", "./output/model.blend"),
-                                        "./output/model.blend")
+                                        "./output/model.blend", Config.OUTPUT_DIR)
 
     elif operation == "render":
         clean["output_dir"] = _check_path(params.get("output_dir", "./output"),
-                                          "./output")
+                                          "./output", Config.OUTPUT_DIR)
         clean["resolution_x"] = int(_check_num(params.get("resolution_x"), 1920))
         clean["resolution_y"] = int(_check_num(params.get("resolution_y"), 1080))
 

@@ -40,6 +40,9 @@ commands = {commands_json}
 # ============================================================
 results = []
 
+# Trusted output directory (resolved absolute, used for path traversal protection)
+_trusted_output_dir = r"{output_dir}"
+
 # Persistent scene-level camera state (shared between auto_camera and render)
 _cam_center = (0, 0, 1.4)
 _cam_span = 5.0
@@ -301,13 +304,17 @@ for cmd in commands:
                 name = "camera_default"
 
         elif operation == "save_blend":
-            fp = params.get("filepath", "./output/model.blend")
+            fp = os.path.abspath(os.path.join(_trusted_output_dir, params.get("filepath", "model.blend")))
+            if not (fp == _trusted_output_dir or fp.startswith(_trusted_output_dir + os.sep)):
+                raise ValueError("Path traversal detected: " + fp)
             os.makedirs(os.path.dirname(fp), exist_ok=True)
             bpy.ops.wm.save_as_mainfile(filepath=fp)
             name = "saved"
 
         elif operation == "render":
-            output_dir = params.get("output_dir", "./output")
+            output_dir = os.path.abspath(os.path.join(_trusted_output_dir, params.get("output_dir", ".")))
+            if not (output_dir == _trusted_output_dir or output_dir.startswith(_trusted_output_dir + os.sep)):
+                raise ValueError("Path traversal detected: " + output_dir)
             rx = params.get("resolution_x", 1920)
             ry = params.get("resolution_y", 1080)
             os.makedirs(output_dir, exist_ok=True)
@@ -360,12 +367,13 @@ print("BLENDER_RESULTS:" + json.dumps(results, ensure_ascii=False))
 
 def build_script_content(commands_json: str, output_blend: str, output_dir: str) -> str:
     """构造 Background Blender 执行脚本。"""
+    resolved_output_dir = os.path.abspath(output_dir)
     return BPY_SCRIPT_TEMPLATE.replace(
         "{commands_json}", commands_json
     ).replace(
         "{output_blend}", output_blend
     ).replace(
-        "{output_dir}", output_dir
+        "{output_dir}", resolved_output_dir
     ).replace(
         "{scene_setup_code}", scene_setup_code()
     ).replace(
