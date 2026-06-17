@@ -304,16 +304,18 @@ for cmd in commands:
                 name = "camera_default"
 
         elif operation == "save_blend":
-            fp = os.path.abspath(os.path.join(_trusted_output_dir, params.get("filepath", "model.blend")))
-            if not (fp == _trusted_output_dir or fp.startswith(_trusted_output_dir + os.sep)):
+            fp = os.path.realpath(os.path.join(_trusted_output_dir, params.get("filepath", "model.blend")))
+            real_trusted = os.path.realpath(_trusted_output_dir)
+            if not (fp == real_trusted or fp.startswith(real_trusted + os.sep)):
                 raise ValueError("Path traversal detected: " + fp)
             os.makedirs(os.path.dirname(fp), exist_ok=True)
             bpy.ops.wm.save_as_mainfile(filepath=fp)
             name = "saved"
 
         elif operation == "render":
-            output_dir = os.path.abspath(os.path.join(_trusted_output_dir, params.get("output_dir", ".")))
-            if not (output_dir == _trusted_output_dir or output_dir.startswith(_trusted_output_dir + os.sep)):
+            output_dir = os.path.realpath(os.path.join(_trusted_output_dir, params.get("output_dir", ".")))
+            real_trusted = os.path.realpath(_trusted_output_dir)
+            if not (output_dir == real_trusted or output_dir.startswith(real_trusted + os.sep)):
                 raise ValueError("Path traversal detected: " + output_dir)
             rx = params.get("resolution_x", 1920)
             ry = params.get("resolution_y", 1080)
