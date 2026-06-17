@@ -98,22 +98,36 @@ def _plan_to_commands(plan: list[dict]) -> list[BlenderCommand]:
     return commands
 
 
+def _minimum_wall_thickness(commands: list[BlenderCommand]) -> float:
+    """返回建模计划中的最小墙厚（米），用于限制顶点清理阈值。"""
+    thicknesses = []
+    for command in commands:
+        if command.operation != "extrude_wall":
+            continue
+        value = command.params.get("thickness", 0.24)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            thicknesses.append(float(value))
+    return min(thicknesses) if thicknesses else 0.24
+
+
 def _create_post_processing_commands(
     base_step_id: int,
     output_dir: str,
     floor_bounds: dict | None = None,
     wall_height: float = 2.8,
+    min_wall_thickness: float = 0.24,
 ) -> list[BlenderCommand]:
     """创建后处理命令：墙体合并焊接、地面天花板、清理、相机、保存、渲染"""
     # 使用绝对路径：MCP 模式下 Blender 进程工作目录不可控
     output_blend = os.path.abspath(os.path.join(output_dir, "model.blend"))
     output_dir_abs = os.path.abspath(output_dir)
+    merge_threshold = min(0.01, max(0.001, min_wall_thickness * 0.1))
 
     commands = [
-        # 1. 将所有墙体 Join 成一个 Mesh → Merge by Distance → 水密闭合
+        # 1. 将墙体做实体并集，再用小阈值清理重复点，避免压塌墙厚
         BlenderCommand(
             operation="join_and_merge",
-            params={"merge_threshold": 0.3},
+            params={"merge_threshold": merge_threshold},
             step_id=base_step_id + 1,
         ),
         # 2. 生成地面和天花板
@@ -226,8 +240,9 @@ def execute_node(state: AgentState) -> AgentState:
     floor_info = infer_floor_bounds(cad_features)
     floor_info = apply_offset_to_bounds(floor_info, offset)
     wall_height = floor_info.get("wall_height", 2.8) if floor_info else 2.8
+    min_wall_thickness = _minimum_wall_thickness(commands)
     post_commands = _create_post_processing_commands(
-        max_step_id, Config.OUTPUT_DIR, floor_info, wall_height
+        max_step_id, Config.OUTPUT_DIR, floor_info, wall_height, min_wall_thickness
     )
     all_commands = commands + list(post_commands)
 

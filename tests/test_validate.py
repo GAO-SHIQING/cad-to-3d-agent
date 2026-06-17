@@ -70,3 +70,46 @@ def test_geometry_pass_without_l2_is_partial_validation(monkeypatch):
 
     assert result["validation_passed"] is True
     assert result["partial_validation"] is True
+
+
+def test_validate_can_skip_llm_audit_when_disabled(monkeypatch):
+    from agent.config import Config
+    from agent.nodes.validate import validate_node
+
+    def fake_geometry(*args, **kwargs):
+        return {
+            "geometry_passed": True,
+            "blocking_errors": [],
+            "issues": [],
+            "checks": [],
+        }
+
+    monkeypatch.setattr("agent.nodes.validate.run_geometry_checks", fake_geometry)
+    monkeypatch.setattr("agent.nodes.validate.render_dxf_to_base64", lambda *args, **kwargs: "cad")
+    monkeypatch.setattr("agent.nodes.validate._read_image_base64", lambda *args, **kwargs: "model")
+    monkeypatch.setattr(Config, "QUALITY_THRESHOLD", 50.0)
+    monkeypatch.setattr(Config, "VALIDATION_LLM_ENABLED", False, raising=False)
+
+    called = {"value": False}
+
+    def boom(*args, **kwargs):
+        called["value"] = True
+        raise AssertionError("LLM audit should be skipped")
+
+    monkeypatch.setattr("agent.nodes.validate.chat_with_multiple_images", boom)
+
+    state = {
+        "cad_path": "examples/single_room.dxf",
+        "cad_features": [],
+        "execution_results": [],
+        "render_images": ["output/render_00.png"],
+        "revision_count": 0,
+        "max_revisions": 3,
+        "user_feedback": "",
+    }
+
+    result = validate_node(state)
+
+    assert result["validation_passed"] is True
+    assert result["partial_validation"] is True
+    assert called["value"] is False

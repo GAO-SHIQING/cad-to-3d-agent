@@ -4,11 +4,11 @@ from openai import OpenAI
 from .config import Config
 
 
-def create_client() -> OpenAI:
+def create_client(timeout: float | None = None) -> OpenAI:
     return OpenAI(
         api_key=Config.OPENAI_API_KEY,
         base_url=Config.OPENAI_BASE_URL,
-        timeout=Config.LLM_TIMEOUT,
+        timeout=timeout or Config.LLM_TIMEOUT,
     )
 
 
@@ -19,9 +19,10 @@ def chat(
     model: str | None = None,
     temperature: float = 0.3,
     max_tokens: int = 4096,
+    timeout: float | None = None,
 ) -> str:
     """发送纯文本 chat completion 请求，返回文本响应"""
-    client = create_client()
+    client = create_client(timeout=timeout)
     response = client.chat.completions.create(
         model=model or Config.LLM_MODEL,
         temperature=temperature,
@@ -42,6 +43,7 @@ def chat_with_vision(
     model: str | None = None,
     temperature: float = 0.3,
     max_tokens: int = 4096,
+    timeout: float | None = None,
 ) -> str:
     """发送带单张图片的 chat completion 请求（Vision API），返回文本响应。
 
@@ -63,6 +65,7 @@ def chat_with_vision(
         model=model,
         temperature=temperature,
         max_tokens=max_tokens,
+        timeout=timeout,
     )
 
 
@@ -74,6 +77,7 @@ def chat_with_multiple_images(
     model: str | None = None,
     temperature: float = 0.3,
     max_tokens: int = 4096,
+    timeout: float | None = None,
 ) -> str:
     """发送带多张图片的 chat completion 请求，返回文本响应。
 
@@ -95,6 +99,7 @@ def chat_with_multiple_images(
         model=model,
         temperature=temperature,
         max_tokens=max_tokens,
+        timeout=timeout,
     )
 
 
@@ -106,6 +111,7 @@ def _chat_with_images(
     model: str | None = None,
     temperature: float = 0.3,
     max_tokens: int = 4096,
+    timeout: float | None = None,
 ) -> str:
     """内部：发送带图片的 chat completion 请求。"""
     content: list[dict] = [{"type": "text", "text": user_message}]
@@ -118,7 +124,7 @@ def _chat_with_images(
             },
         })
 
-    client = create_client()
+    client = create_client(timeout=timeout)
     response = client.chat.completions.create(
         model=model or Config.LLM_MODEL,
         temperature=temperature,

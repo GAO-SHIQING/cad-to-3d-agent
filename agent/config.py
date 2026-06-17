@@ -11,6 +11,8 @@ class Config:
     OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
     LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-5.5")
     LLM_TIMEOUT: float = float(os.getenv("LLM_TIMEOUT", "90"))
+    VALIDATION_LLM_ENABLED: bool = os.getenv("VALIDATION_LLM_ENABLED", "true").lower() in ("1", "true", "yes")
+    VALIDATION_LLM_TIMEOUT: float = float(os.getenv("VALIDATION_LLM_TIMEOUT", str(LLM_TIMEOUT)))
     BLENDER_EXECUTABLE: str = os.getenv("BLENDER_EXECUTABLE", "blender")
     MCP_HOST: str = os.getenv("MCP_HOST", "localhost")
     MCP_PORT: int = int(os.getenv("MCP_PORT", "9876"))

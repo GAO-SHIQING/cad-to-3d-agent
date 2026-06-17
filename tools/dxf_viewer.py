@@ -12,6 +12,7 @@
 import base64
 import io
 import os
+from functools import lru_cache
 from pathlib import Path
 
 import ezdxf
@@ -67,6 +68,17 @@ LAYER_STYLES = {
     "DOOR":   {"lineweight": 0.35, "color": "#27ae60"},
 }
 DEFAULT_STYLE = {"lineweight": 0.3, "color": "#7f8c8d"}
+
+
+def clear_render_cache() -> None:
+    """清空 DXF 渲染缓存，主要供测试和长进程调试使用。"""
+    _render_png_bytes_cached.cache_clear()
+
+
+def _cache_key(dxf_path: str, dpi: int) -> tuple[str, int, int, int]:
+    resolved = Path(_validate_input_path(dxf_path)).resolve()
+    stat = resolved.stat()
+    return (str(resolved), int(stat.st_mtime_ns), int(stat.st_size), int(dpi))
 
 
 def _apply_layer_styles(ctx: RenderContext) -> None:
@@ -125,6 +137,42 @@ def _render_core(
     return (fig, ax)
 
 
+def _render_png_bytes_from_key(
+    cache_key: tuple[str, int, int, int]
+) -> bytes | None:
+    path, _mtime_ns, _size, dpi = cache_key
+    result = _render_core(path, dpi=dpi)
+    if result is None:
+        return None
+
+    fig, _ax = result
+    try:
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.2)
+        return buf.getvalue()
+    except Exception as e:
+        print(f"[dxf_viewer] 渲染失败: {e}")
+        return None
+    finally:
+        plt.close(fig)
+
+
+@lru_cache(maxsize=16)
+def _render_png_bytes_cached(
+    cache_key: tuple[str, int, int, int]
+) -> bytes | None:
+    return _render_png_bytes_from_key(cache_key)
+
+
+def _render_png_bytes(dxf_path: str, dpi: int) -> bytes | None:
+    try:
+        key = _cache_key(dxf_path, dpi)
+    except ValueError as e:
+        print(f"[dxf_viewer] 路径验证失败: {e}")
+        return None
+    return _render_png_bytes_cached(key)
+
+
 def render_dxf_to_base64(dxf_path: str, dpi: int = 200) -> str | None:
     """将 DXF 文件渲染为 base64 编码的 PNG 字符串。
 
@@ -138,23 +186,13 @@ def render_dxf_to_base64(dxf_path: str, dpi: int = 200) -> str | None:
     Returns:
         base64 编码的 PNG 字符串，失败返回 None
     """
-    result = _render_core(dxf_path, dpi=dpi)
-    if result is None:
+    png_bytes = _render_png_bytes(dxf_path, dpi=dpi)
+    if png_bytes is None:
         return None
 
-    fig, _ax = result
-    try:
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.2)
-        buf.seek(0)
-        b64 = base64.b64encode(buf.read()).decode("ascii")
-        print(f"[dxf_viewer] 渲染完成: {len(b64)} 字符 base64")
-        return b64
-    except Exception as e:
-        print(f"[dxf_viewer] 渲染失败: {e}")
-        return None
-    finally:
-        plt.close(fig)
+    b64 = base64.b64encode(png_bytes).decode("ascii")
+    print(f"[dxf_viewer] 渲染完成: {len(b64)} 字符 base64")
+    return b64
 
 
 def render_dxf_to_png(
@@ -176,18 +214,15 @@ def render_dxf_to_png(
         print(f"[dxf_viewer] 输出路径不允许: {e}")
         return False
 
-    result = _render_core(dxf_path, dpi=dpi)
-    if result is None:
+    png_bytes = _render_png_bytes(dxf_path, dpi=dpi)
+    if png_bytes is None:
         return False
 
-    fig, _ax = result
     try:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(output_path, format="png", bbox_inches="tight", pad_inches=0.2)
+        Path(output_path).write_bytes(png_bytes)
         print(f"[dxf_viewer] 渲染完成: {output_path}")
         return True
     except Exception as e:
         print(f"[dxf_viewer] 渲染失败: {e}")
         return False
-    finally:
-        plt.close(fig)

@@ -101,7 +101,7 @@ def validate_node(state: AgentState) -> AgentState:
     if render_images:
         model_b64 = _read_image_base64(render_images[0])
 
-    if cad_b64 and model_b64:
+    if cad_b64 and model_b64 and Config.VALIDATION_LLM_ENABLED:
         print("[validate] L2 Combined audit: CAD-vs-3D + semantic check...")
         try:
             combined_msg = json.dumps({
@@ -124,6 +124,7 @@ def validate_node(state: AgentState) -> AgentState:
                 user_message=combined_msg,
                 images_base64=[cad_b64, model_b64],
                 max_tokens=2048,
+                timeout=Config.VALIDATION_LLM_TIMEOUT,
             )
             response = response.strip()
             if response.startswith("```"):
@@ -144,7 +145,14 @@ def validate_node(state: AgentState) -> AgentState:
         except (json.JSONDecodeError, Exception) as e:
             print(f"[validate] L2 Combined audit failed: {e}")
     else:
-        print(f"[validate] L2 Skipped (CAD:{bool(cad_b64)}, 3D:{bool(model_b64)})")
+        reason = []
+        if not cad_b64:
+            reason.append("CAD=False")
+        if not model_b64:
+            reason.append("3D=False")
+        if not Config.VALIDATION_LLM_ENABLED:
+            reason.append("LLM=disabled")
+        print(f"[validate] L2 Skipped ({', '.join(reason)})")
         partial_validation = True
 
     # ==================================================================
